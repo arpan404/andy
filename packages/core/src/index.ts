@@ -13,6 +13,7 @@ export * from "./host-api-handler.js";
 export * from "./llm.js";
 export * from "./plugin-host.js";
 export * from "./plugin-installer.js";
+export * from "./plugin-lifecycle.js";
 export * from "./plugin-sandbox.js";
 export * from "./plugin-worker-protocol.js";
 export * from "./runtime.js";

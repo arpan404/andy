@@ -48,6 +48,8 @@ export interface AgentSession {
   role: AgentRole;
   depth: number;
   messages: readonly AgentMessage[];
+  traceId?: string;
+  cancellationTokenId?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -65,6 +67,8 @@ export type AiTextStreamResult<TOOLS extends ToolSet = ToolSet> = StreamTextResu
 export interface LlmRequest {
   session: AgentSession;
   tools: readonly RuntimeToolRecord[];
+  traceId?: string;
+  abortSignal?: AbortSignal;
 }
 
 export interface LlmRunner {
@@ -76,6 +80,7 @@ export interface StreamingLlmRunner extends LlmRunner {
 }
 
 export interface AgentRunInput {
+  sessionId?: string;
   agentId?: string;
   role?: AgentRole;
   depth?: number;
@@ -83,10 +88,55 @@ export interface AgentRunInput {
   userMessage: string;
   maxToolCalls?: number;
   maxParallelToolCalls?: number;
+  traceId?: string;
+  cancellationTokenId?: string;
+  timeout?: import("effect/Duration").DurationInput;
 }
 
 export interface AgentRunResult {
   session: AgentSession;
+  response: string;
+  toolResults: readonly ToolExecutionResult[];
+}
+
+export type StreamingAgentEvent =
+  | {
+      type: "stream.started";
+      sessionId: string;
+      agentId: string;
+      traceId?: string;
+    }
+  | {
+      type: "stream.text";
+      sessionId: string;
+      delta: string;
+      traceId?: string;
+    }
+  | {
+      type: "stream.tool_call";
+      sessionId: string;
+      toolCallId: string;
+      toolName: string;
+      traceId?: string;
+    }
+  | {
+      type: "stream.tool_result";
+      sessionId: string;
+      toolCallId: string;
+      toolName: string;
+      result: ToolExecutionResult;
+      traceId?: string;
+    }
+  | {
+      type: "stream.completed";
+      sessionId: string;
+      response: string;
+      traceId?: string;
+    };
+
+export interface StreamingAgentRunResult {
+  session: AgentSession;
+  events: readonly StreamingAgentEvent[];
   response: string;
   toolResults: readonly ToolExecutionResult[];
 }

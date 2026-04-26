@@ -32,6 +32,18 @@ export class InMemorySecretBroker {
     )();
   }
 
+  rotate(secret: SecretReference): Effect.Effect<void> {
+    const self = this;
+    return Effect.fn("InMemorySecretBroker.rotate")(function* () {
+      yield* self.set(secret);
+      yield* self.#audit.record({
+        type: "secret.rotated",
+        pluginId: secret.pluginId,
+        scope: secret.scope,
+      });
+    })();
+  }
+
   get(
     request: SecretRequest,
   ): Effect.Effect<string, SecretAccessDeniedError | SecretNotFoundError> {
@@ -66,6 +78,20 @@ export class InMemorySecretBroker {
 
       return value;
     })();
+  }
+
+  listReferences(): readonly Omit<SecretReference, "value">[] {
+    return [...this.#secrets.keys()]
+      .map((key) => {
+        const [pluginId, ...scopeParts] = key.split(":");
+        return {
+          pluginId: pluginId ?? "",
+          scope: scopeParts.join(":"),
+        };
+      })
+      .sort((a, b) =>
+        `${a.pluginId}:${a.scope}`.localeCompare(`${b.pluginId}:${b.scope}`),
+      );
   }
 }
 

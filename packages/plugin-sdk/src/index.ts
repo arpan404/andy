@@ -150,6 +150,7 @@ export interface PluginSource {
 }
 
 export interface PluginManifest {
+  schemaVersion?: string;
   id: string;
   name: string;
   version: string;
@@ -261,6 +262,7 @@ export const SensitiveFilesystemRootSchema = Schema.Struct({
 });
 
 export const PluginManifestSchema = Schema.Struct({
+  schemaVersion: Schema.optional(Schema.String),
   id: Schema.String,
   name: Schema.String,
   version: Schema.String,

@@ -309,6 +309,8 @@ export interface SubprocessPluginHostOptions {
   keepSandboxAfterStop?: boolean;
   baseSandboxDir?: string;
   processIsolation?: ProcessIsolationProfile;
+  requestTimeoutMs?: number;
+  maxMessageBytes?: number;
 }
 
 export type HostedPluginHostApiHandler = (
@@ -323,6 +325,8 @@ export class SubprocessManifestPluginHost implements ManifestPluginHost {
   readonly #keepSandboxAfterStop: boolean;
   readonly #baseSandboxDir: string | undefined;
   readonly #processIsolation: ProcessIsolationProfile;
+  readonly #requestTimeoutMs: number;
+  readonly #maxMessageBytes: number;
   readonly #pending = new Map<
     string,
     {
@@ -341,6 +345,8 @@ export class SubprocessManifestPluginHost implements ManifestPluginHost {
     this.#processIsolation = options.processIsolation ?? {
       kind: "process-boundary",
     };
+    this.#requestTimeoutMs = options.requestTimeoutMs ?? 30_000;
+    this.#maxMessageBytes = options.maxMessageBytes ?? 1024 * 1024;
   }
 
   startManifest(
@@ -424,6 +430,15 @@ export class SubprocessManifestPluginHost implements ManifestPluginHost {
     child: ChildProcessWithoutNullStreams,
     manifest: PluginManifest,
   ): void {
+    if (Buffer.byteLength(line, "utf8") > this.#maxMessageBytes) {
+      this.#rejectPending(
+        new Error(
+          `Plugin subprocess '${manifest.id}' emitted a message larger than ${this.#maxMessageBytes} bytes.`,
+        ),
+      );
+      return;
+    }
+
     const message = parseWorkerHostMessage(line);
     if (!message) {
       return;
@@ -503,6 +518,14 @@ export class SubprocessManifestPluginHost implements ManifestPluginHost {
         const response = yield* Effect.tryPromise({
           try: () =>
             new Promise<WorkerPluginHostResponse>((resolve, reject) => {
+              const timeout = setTimeout(() => {
+                self.#pending.delete(requestId);
+                reject(
+                  new Error(
+                    `Subprocess plugin '${options.manifest.id}' tool '${options.toolName}' timed out after ${self.#requestTimeoutMs}ms.`,
+                  ),
+                );
+              }, self.#requestTimeoutMs);
               self.#pending.set(requestId, { resolve, reject });
               options.child.stdin.write(
                 `${JSON.stringify({
@@ -514,6 +537,7 @@ export class SubprocessManifestPluginHost implements ManifestPluginHost {
                 })}\n`,
                 (error) => {
                   if (error) {
+                    clearTimeout(timeout);
                     self.#pending.delete(requestId);
                     reject(error);
                   }
@@ -669,6 +693,8 @@ function createSandboxEnvironment(options: {
     PATH: environment.PATH ?? "",
     HOME: options.sandbox.root,
     TMPDIR: options.sandbox.scratchRoot,
+    ANDY_PLUGIN_NETWORK_HOSTS:
+      options.manifest.permissions?.network?.allowedHosts.join(",") ?? "",
     ANDY_PLUGIN_ID: options.manifest.id,
     ANDY_PLUGIN_SANDBOX_ROOT: options.sandbox.root,
     ANDY_PLUGIN_SCRATCH_ROOT: options.sandbox.scratchRoot,

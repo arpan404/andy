@@ -29,6 +29,7 @@ export class AiSdkLlmRunner implements StreamingLlmRunner {
             model: this.#model,
             messages: [...request.session.messages],
             tools: buildAiSdkTools(request.tools),
+            ...(request.abortSignal ? { abortSignal: request.abortSignal } : {}),
           }),
         catch: (cause) =>
           new LlmRunnerError({
@@ -47,6 +48,7 @@ export class AiSdkLlmRunner implements StreamingLlmRunner {
             model: this.#model,
             messages: [...request.session.messages],
             tools: buildAiSdkTools(request.tools),
+            ...(request.abortSignal ? { abortSignal: request.abortSignal } : {}),
           }),
         catch: (cause) =>
           new LlmRunnerError({

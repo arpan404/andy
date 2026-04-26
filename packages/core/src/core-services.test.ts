@@ -18,6 +18,8 @@ import { InMemorySecretBroker } from "./secrets.js";
 import { JsonFileCoreStateStore } from "./state.js";
 import { TraceManager } from "./tracing.js";
 import { DefaultHostedPluginHostApi } from "./host-api-handler.js";
+import { PluginLifecycleManager } from "./plugin-lifecycle.js";
+import { PluginInstaller, StaticPluginManifestFetcher } from "./plugin-installer.js";
 import { createAndyDaemon } from "./daemon.js";
 import {
   SubprocessManifestPluginHost,
@@ -138,6 +140,52 @@ describe("core kernel services", () => {
     });
   });
 
+  test("hydrates daemon approvals and background jobs from durable state", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "andy-daemon-state-"));
+    const store = new JsonFileCoreStateStore(join(dir, "state.json"));
+    const createdAt = new Date();
+    await Effect.runPromise(
+      store.save({
+        plugins: [],
+        sessions: [],
+        approvals: [
+          {
+            id: "approval-1",
+            runId: "run-1",
+            toolName: "shell.execute",
+            input: { command: "date" },
+            reason: "Needs approval.",
+            status: "pending",
+            createdAt,
+          },
+        ],
+        backgroundJobs: [
+          {
+            id: "job-1",
+            pluginId: "andy.background",
+            toolName: "background.run",
+            input: {},
+            status: "scheduled",
+            createdAt,
+            updatedAt: createdAt,
+          },
+        ],
+      }),
+    );
+
+    const daemon = await Effect.runPromise(
+      createAndyDaemon({
+        audit: new ConsoleAuditSink(),
+        policy: new CapabilityPolicy({ allowedCapabilities: new Set() }),
+        stateStore: store,
+      }),
+    );
+
+    expect(daemon.approvals.list()).toHaveLength(1);
+    expect(await Effect.runPromise(daemon.background.list())).toHaveLength(1);
+    await Effect.runPromise(daemon.saveState());
+  });
+
   test("tracks cancellation tokens and times out effects", async () => {
     const registry = new CancellationRegistry();
     const token = await Effect.runPromise(registry.create());
@@ -210,6 +258,24 @@ describe("core kernel services", () => {
     expect(events).toContain("background.job.updated");
   });
 
+  test("replays event history for late subscribers", async () => {
+    const events: string[] = [];
+    const bus = new InMemoryEventBus();
+    await Effect.runPromise(
+      bus.publish({ type: "trace.started", traceId: "t1", name: "root" }),
+    );
+    bus.subscribe(
+      (event) =>
+        Effect.sync(() => {
+          events.push(event.type);
+        }),
+      { replayFromSequence: 1 },
+    );
+
+    expect(bus.replay()).toHaveLength(1);
+    expect(events).toEqual(["trace.started"]);
+  });
+
   test("routes approval requests through the communication bridge", async () => {
     const audit = new ConsoleAuditSink();
     const communication = new CommunicationBridge({ audit });
@@ -267,6 +333,74 @@ describe("core kernel services", () => {
     expect(resume.listParked()).toHaveLength(0);
   });
 
+  test("expires parked approval actions", async () => {
+    const approvals = new ApprovalManager({ audit: new ConsoleAuditSink() });
+    const resume = new ApprovalResumeEngine({ approvals });
+    const approval = await Effect.runPromise(
+      approvals.create({
+        runId: "run-expire",
+        toolName: "memory.save",
+        input: { key: "name" },
+        reason: "Memory write requires approval.",
+      }),
+    );
+    await Effect.runPromise(
+      resume.park(approval, () =>
+        Effect.succeed(createApprovalToolResult({ ok: true })),
+      ),
+    );
+
+    const expired = await Effect.runPromise(resume.expire(approval.id));
+
+    expect(expired?.status).toBe("expired");
+    expect(resume.listParked()).toHaveLength(0);
+  });
+
+  test("plans plugin install with validated manifest permission summary", async () => {
+    const source = {
+      type: "github" as const,
+      reference:
+        "https://example.com/plugin.json?ref=0123456789012345678901234567890123456789",
+    };
+    const installer = new PluginInstaller({
+      audit: new ConsoleAuditSink(),
+      fetcher: new StaticPluginManifestFetcher(
+        new Map([
+          [
+            source.reference,
+            {
+              id: "andy.test.install",
+              name: "Install Test",
+              version: "0.1.0",
+              entry: "./plugin.ts",
+              capabilities: ["memory.save"],
+              risk: "low",
+              source,
+              permissions: {
+                network: { allowedHosts: ["api.example.com"] },
+              },
+              tools: [
+                {
+                  name: "memory.save",
+                  description: "Save memory.",
+                  capabilities: ["memory.save"],
+                  risk: "low",
+                },
+              ],
+            },
+          ],
+        ]),
+      ),
+    });
+
+    const plan = await Effect.runPromise(installer.plan(source));
+
+    expect(plan.requiresApproval).toBe(true);
+    expect(plan.permissionSummary).toContain("capability:memory.save");
+    expect(plan.permissionSummary).toContain("network:api.example.com");
+    expect(plan.pinnedSource.reference).toBe(source.reference);
+  });
+
   test("runs manifest-declared tools through a worker plugin host", async () => {
     const audit = new ConsoleAuditSink();
     const host = new WorkerManifestPluginHost({ audit });
@@ -306,6 +440,48 @@ describe("core kernel services", () => {
       pluginId: "andy.test.worker",
       input: { ok: true },
     });
+  });
+
+  test("lifecycle manager starts hosted plugins and stops handles", async () => {
+    const audit = new ConsoleAuditSink();
+    const runtime = new AgentRuntime({
+      audit,
+      policy: new CapabilityPolicy({
+        allowedCapabilities: new Set(["test.echo"]),
+      }),
+    });
+    const lifecycle = new PluginLifecycleManager({
+      audit,
+      runtime,
+      host: new WorkerManifestPluginHost({ audit }),
+    });
+
+    await Effect.runPromise(
+      lifecycle.start({
+        id: "andy.test.lifecycle",
+        name: "Lifecycle Test",
+        version: "0.1.0",
+        entry: new URL("./worker-plugin-fixture.ts", import.meta.url).href,
+        executionMode: "worker",
+        capabilities: ["test.echo"],
+        risk: "low",
+        tools: [
+          {
+            name: "test.echo",
+            description: "Echo input through the worker boundary.",
+            capabilities: ["test.echo"],
+            risk: "low",
+          },
+        ],
+      }),
+    );
+
+    expect(runtime.listTools().map((tool) => tool.qualifiedName)).toContain(
+      "andy.test.lifecycle.test.echo",
+    );
+    expect(lifecycle.list()).toHaveLength(1);
+    await Effect.runPromise(lifecycle.stop("andy.test.lifecycle"));
+    expect(lifecycle.list()).toHaveLength(0);
   });
 
   test("lets sandboxed worker plugins request host APIs through RPC", async () => {

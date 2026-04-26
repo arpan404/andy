@@ -2,6 +2,8 @@ import type { AuditSink } from "@andy/audit";
 import { isJsonValue } from "@andy/types";
 import type { JSONValue } from "ai";
 import { Effect } from "effect";
+import type { DurationInput } from "effect/Duration";
+import { type CancellationRegistry, withTimeout } from "./cancellation.js";
 import { AgentToolInputInvalidError, AgentToolLimitExceededError } from "./errors.js";
 import type { AgentRuntime } from "./runtime.js";
 import type {
@@ -20,23 +22,31 @@ export class AgentKernel {
   readonly #runtime: AgentRuntime;
   readonly #llm: LlmRunner;
   readonly #audit: AuditSink;
+  readonly #cancellation: CancellationRegistry | undefined;
   readonly #sessions = new Map<string, AgentSession>();
 
-  constructor(options: { runtime: AgentRuntime; llm: LlmRunner; audit: AuditSink }) {
+  constructor(options: {
+    runtime: AgentRuntime;
+    llm: LlmRunner;
+    audit: AuditSink;
+    cancellation?: CancellationRegistry;
+  }) {
     this.#runtime = options.runtime;
     this.#llm = options.llm;
     this.#audit = options.audit;
+    this.#cancellation = options.cancellation;
   }
 
   run(input: AgentRunInput): Effect.Effect<AgentRunResult, AgentKernelError> {
     const self = this;
-    return Effect.fn("AgentKernel.run")(function* () {
+    const program = Effect.fn("AgentKernel.run")(function* () {
       let session = self.#createSession(input);
       self.#sessions.set(session.id, session);
       yield* self.#audit.record({
         type: "agent.session.started",
         sessionId: session.id,
         agentId: session.agentId,
+        traceId: session.traceId,
       });
 
       const toolResults: ToolExecutionResult[] = [];
@@ -45,9 +55,11 @@ export class AgentKernel {
       let response = "";
 
       for (let toolCallCount = 0; toolCallCount <= maxToolCalls; toolCallCount += 1) {
+        yield* self.#ensureNotCancelled(session);
         const output = yield* self.#llm.complete({
           session,
           tools: self.#runtime.listTools(),
+          ...(session.traceId ? { traceId: session.traceId } : {}),
         });
 
         for (const message of output.response.messages) {
@@ -95,6 +107,7 @@ export class AgentKernel {
         type: "agent.session.completed",
         sessionId: session.id,
         agentId: session.agentId,
+        traceId: session.traceId,
       });
 
       return {
@@ -103,6 +116,8 @@ export class AgentKernel {
         toolResults,
       };
     })();
+
+    return applyOptionalTimeout(program, input.timeout);
   }
 
   #executeToolCallBatch(options: {
@@ -137,11 +152,22 @@ export class AgentKernel {
               type: "agent.tool.requested",
               sessionId: options.session.id,
               agentId: options.session.agentId,
+              traceId: options.session.traceId,
               toolName: runtimeToolName,
             });
             const result = yield* self.#runtime.executeTool(
               runtimeToolName,
               call.input,
+              {
+                sessionId: options.session.id,
+                agentId: options.session.agentId,
+                ...(options.session.traceId
+                  ? { traceId: options.session.traceId }
+                  : {}),
+                ...(options.session.cancellationTokenId
+                  ? { cancellationTokenId: options.session.cancellationTokenId }
+                  : {}),
+              },
             );
             return {
               toolCallId: call.toolCallId,
@@ -174,15 +200,50 @@ export class AgentKernel {
     messages.push({ role: "user", content: input.userMessage });
 
     return {
-      id: crypto.randomUUID(),
+      id: input.sessionId ?? crypto.randomUUID(),
       agentId: input.agentId ?? crypto.randomUUID(),
       role: input.role ?? "primary",
       depth: input.depth ?? 0,
       messages,
+      ...(input.traceId ? { traceId: input.traceId } : {}),
+      ...(input.cancellationTokenId
+        ? { cancellationTokenId: input.cancellationTokenId }
+        : {}),
       createdAt: now,
       updatedAt: now,
     };
   }
+
+  #ensureNotCancelled(session: AgentSession): Effect.Effect<void, AgentKernelError> {
+    const tokenId = session.cancellationTokenId;
+    if (!tokenId || !this.#cancellation) {
+      return Effect.void;
+    }
+
+    const token = this.#cancellation.get(tokenId);
+    if (token?.status !== "cancelled") {
+      return Effect.void;
+    }
+
+    return Effect.fail(
+      new AgentToolLimitExceededError({
+        sessionId: session.id,
+        limit: 0,
+        message: `Agent session '${session.id}' was cancelled: ${token.reason ?? "cancelled"}.`,
+      }),
+    );
+  }
+}
+
+function applyOptionalTimeout<A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+  timeout: DurationInput | undefined,
+): Effect.Effect<A, E, R> {
+  if (!timeout) {
+    return effect;
+  }
+
+  return withTimeout(effect, timeout).pipe(Effect.mapError((error) => error as E));
 }
 
 function toAiJsonValue(value: unknown): JSONValue {

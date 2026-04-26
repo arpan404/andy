@@ -21,11 +21,14 @@ import {
   ToolHostPrivilegeDeniedError,
   ToolApprovalRequiredError,
   ToolAlreadyRegisteredError,
+  ToolInputSchemaInvalidError,
   ToolNameAmbiguousError,
   ToolNotRegisteredError,
+  ToolOutputSchemaInvalidError,
   ToolPolicyDeniedError,
 } from "./errors.js";
 import { ApprovalManager } from "./approvals.js";
+import type { ApprovalResumeEngine } from "./approval-resume.js";
 import { toAiSdkToolName } from "./ai-tools.js";
 import { createPluginHostApi } from "./host-api.js";
 import type { RuntimeToolRecord, ToolExecutionResult } from "./types.js";
@@ -36,8 +39,19 @@ export interface AgentRuntimeOptions {
   policy: PolicyEngine;
   scratchFs?: AgentFileSystem;
   approvalManager?: ApprovalManager;
+  approvalResume?: ApprovalResumeEngine;
   hostPrivilegePolicy?: HostPrivilegePolicy;
   pluginStorageFactory?: (pluginId: string) => AgentFileSystem;
+}
+
+export interface ToolExecutionContext {
+  sessionId?: string;
+  agentId?: string;
+  userId?: string;
+  channelId?: string;
+  taskId?: string;
+  traceId?: string;
+  cancellationTokenId?: string;
 }
 
 export interface HostPrivilegePolicy {
@@ -71,6 +85,7 @@ export class AgentRuntime {
   readonly #audit: AuditSink;
   readonly #policy: PolicyEngine;
   readonly #approvalManager: ApprovalManager;
+  readonly #approvalResume: ApprovalResumeEngine | undefined;
   readonly #hostPrivilegePolicy: HostPrivilegePolicy;
   readonly #scratchFs: AgentFileSystem;
   readonly #pluginStorageFactory: (pluginId: string) => AgentFileSystem;
@@ -83,6 +98,7 @@ export class AgentRuntime {
     this.#policy = options.policy;
     this.#approvalManager =
       options.approvalManager ?? new ApprovalManager({ audit: options.audit });
+    this.#approvalResume = options.approvalResume;
     this.#hostPrivilegePolicy = options.hostPrivilegePolicy ?? {
       allowedPluginIds: new Set(),
       requireLocalSource: true,
@@ -252,6 +268,7 @@ export class AgentRuntime {
   executeTool(
     toolName: string,
     input: JsonValue,
+    context: ToolExecutionContext = {},
   ): Effect.Effect<ToolExecutionResult, AgentRuntimeError> {
     const self = this;
     return Effect.fn("AgentRuntime.executeTool")(function* () {
@@ -285,12 +302,34 @@ export class AgentRuntime {
       }
 
       const runId = crypto.randomUUID();
-      yield* self.#audit.record({ type: "tool.requested", runId, toolName });
-
-      const decision = self.#policy.decide(registeredTool.definition, input, {
-        pluginId: registeredTool.pluginId,
-        risk: registeredTool.definition.risk,
+      yield* validateJsonSchema({
+        toolName,
+        phase: "input",
+        schema: registeredTool.definition.inputSchema,
+        value: input,
       });
+      yield* self.#audit.record({
+        type: "tool.requested",
+        runId,
+        toolName,
+        traceId: context.traceId,
+        sessionId: context.sessionId,
+        agentId: context.agentId,
+      });
+
+      const policyContext = {
+        pluginId: registeredTool.pluginId,
+        ...(context.userId ? { userId: context.userId } : {}),
+        ...(context.channelId ? { channelId: context.channelId } : {}),
+        ...(context.sessionId ? { sessionId: context.sessionId } : {}),
+        ...(context.taskId ? { taskId: context.taskId } : {}),
+        risk: registeredTool.definition.risk,
+      };
+      const decision = self.#policy.decide(
+        registeredTool.definition,
+        input,
+        policyContext,
+      );
       const policyEvent: AuditEvent =
         "reason" in decision
           ? {
@@ -299,12 +338,14 @@ export class AgentRuntime {
               toolName,
               decision: decision.type,
               reason: decision.reason,
+              traceId: context.traceId,
             }
           : {
               type: "policy.decision",
               runId,
               toolName,
               decision: decision.type,
+              traceId: context.traceId,
             };
       yield* self.#audit.record(policyEvent);
 
@@ -315,6 +356,18 @@ export class AgentRuntime {
           input,
           reason: decision.reason,
         });
+        if (self.#approvalResume) {
+          yield* self.#approvalResume.park(approval, () =>
+            self.#executeRegisteredTool({
+              plugin,
+              registeredTool,
+              input,
+              runId,
+              toolName,
+              context,
+            }),
+          );
+        }
         return yield* Effect.fail(
           new ToolApprovalRequiredError({
             approvalId: approval.id,
@@ -335,24 +388,60 @@ export class AgentRuntime {
         );
       }
 
-      const output = yield* registeredTool.definition.execute(input, {
-        pluginId: registeredTool.pluginId,
+      return yield* self.#executeRegisteredTool({
+        plugin,
+        registeredTool,
+        input,
         runId,
+        toolName,
+        context,
+      });
+    })();
+  }
+
+  #executeRegisteredTool(options: {
+    plugin: RegisteredPlugin;
+    registeredTool: RegisteredTool;
+    input: JsonValue;
+    runId: string;
+    toolName: string;
+    context?: ToolExecutionContext;
+  }): Effect.Effect<ToolExecutionResult, AgentRuntimeError> {
+    const self = this;
+    return Effect.fn("AgentRuntime.executeRegisteredTool")(function* () {
+      const output = yield* options.registeredTool.definition.execute(options.input, {
+        pluginId: options.registeredTool.pluginId,
+        runId: options.runId,
         host: createPluginHostApi({
-          pluginId: plugin.definition.id,
-          runId,
-          declaredCapabilities: new Set(plugin.definition.capabilities),
+          pluginId: options.plugin.definition.id,
+          runId: options.runId,
+          declaredCapabilities: new Set(options.plugin.definition.capabilities),
           audit: self.#audit,
           executeTool: (targetToolName, targetInput) =>
-            self.executeTool(targetToolName, targetInput),
+            self.executeTool(targetToolName, targetInput, options.context),
         }),
-        storageFs: plugin.storageFs,
+        storageFs: options.plugin.storageFs,
         scratchFs: self.#scratchFs,
       });
 
-      yield* self.#audit.record({ type: "tool.completed", runId, toolName });
+      yield* validateJsonSchema({
+        toolName: options.toolName,
+        phase: "output",
+        schema: options.registeredTool.definition.outputSchema,
+        value: output,
+      });
 
-      return { runId, output };
+      yield* self.#audit.record({
+        type: "tool.completed",
+        runId: options.runId,
+        toolName: options.toolName,
+        traceId: options.context?.traceId,
+      });
+
+      return {
+        runId: options.runId,
+        output,
+      };
     })();
   }
 
@@ -453,6 +542,89 @@ export class AgentRuntime {
 
     return Effect.succeed(this.#tools.get(qualifiedName));
   }
+}
+
+function validateJsonSchema(options: {
+  toolName: string;
+  phase: "input" | "output";
+  schema: unknown;
+  value: JsonValue;
+}): Effect.Effect<void, ToolInputSchemaInvalidError | ToolOutputSchemaInvalidError> {
+  if (!options.schema) {
+    return Effect.void;
+  }
+
+  const valid = matchesMinimalJsonSchema(options.schema, options.value);
+  if (valid) {
+    return Effect.void;
+  }
+
+  const message = `Tool '${options.toolName}' ${options.phase} did not match its JSON schema.`;
+  if (options.phase === "input") {
+    return Effect.fail(
+      new ToolInputSchemaInvalidError({
+        toolName: options.toolName,
+        message,
+      }),
+    );
+  }
+
+  return Effect.fail(
+    new ToolOutputSchemaInvalidError({
+      toolName: options.toolName,
+      message,
+    }),
+  );
+}
+
+function matchesMinimalJsonSchema(schema: unknown, value: JsonValue): boolean {
+  if (typeof schema !== "object" || schema === null) {
+    return true;
+  }
+
+  const typed = schema as {
+    type?: unknown;
+    required?: unknown;
+    properties?: unknown;
+  };
+  if (typed.type === "object") {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      return false;
+    }
+    const record = value as Record<string, JsonValue>;
+    if (Array.isArray(typed.required)) {
+      for (const key of typed.required) {
+        if (typeof key === "string" && !(key in record)) {
+          return false;
+        }
+      }
+    }
+    if (typeof typed.properties === "object" && typed.properties !== null) {
+      for (const [key, propertySchema] of Object.entries(typed.properties)) {
+        if (
+          key in record &&
+          !matchesMinimalJsonSchema(propertySchema, record[key] ?? null)
+        ) {
+          return false;
+        }
+      }
+    }
+  }
+
+  if (typed.type === "array" && !Array.isArray(value)) {
+    return false;
+  }
+  if (typed.type === "string" && typeof value !== "string") {
+    return false;
+  }
+  if (typed.type === "number" && typeof value !== "number") {
+    return false;
+  }
+  if (typed.type === "boolean" && typeof value !== "boolean") {
+    return false;
+  }
+
+  return true;
 }
 
 function createPluginStorageFileSystem(

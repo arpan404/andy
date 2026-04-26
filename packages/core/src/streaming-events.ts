@@ -1,6 +1,11 @@
 import type { Effect } from "effect";
 import type { AuditSink } from "@andy/audit";
-import type { AgentRunInput, AiTextStreamResult, StreamingLlmRunner } from "./types.js";
+import type {
+  AgentRunInput,
+  AiTextStreamResult,
+  StreamingAgentRunResult,
+  StreamingLlmRunner,
+} from "./types.js";
 import type { AgentRuntime } from "./runtime.js";
 import { StreamingAgentKernel } from "./streaming-agent-kernel.js";
 import type { AgentKernelError } from "./types.js";
@@ -18,5 +23,9 @@ export class StreamingAgentService {
 
   stream(input: AgentRunInput): Effect.Effect<AiTextStreamResult, AgentKernelError> {
     return this.#kernel.stream(input);
+  }
+
+  run(input: AgentRunInput): Effect.Effect<StreamingAgentRunResult, AgentKernelError> {
+    return this.#kernel.run(input);
   }
 }

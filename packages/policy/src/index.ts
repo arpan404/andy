@@ -39,6 +39,16 @@ export interface PolicyRule {
   userIds?: ReadonlySet<string>;
   channelIds?: ReadonlySet<string>;
   risks?: ReadonlySet<string>;
+  taskIds?: ReadonlySet<string>;
+}
+
+export interface TemporaryPolicyGrant {
+  id: string;
+  pluginId?: string;
+  capability: string;
+  taskId?: string;
+  userId?: string;
+  expiresAt: Date;
 }
 
 export class CapabilityPolicy implements PolicyEngine {
@@ -97,10 +107,16 @@ export class CapabilityPolicy implements PolicyEngine {
 export class RulePolicy implements PolicyEngine {
   readonly #fallback: PolicyEngine;
   readonly #rules: readonly PolicyRule[];
+  readonly #grants: readonly TemporaryPolicyGrant[];
 
-  constructor(options: { fallback: PolicyEngine; rules: readonly PolicyRule[] }) {
+  constructor(options: {
+    fallback: PolicyEngine;
+    rules: readonly PolicyRule[];
+    grants?: readonly TemporaryPolicyGrant[];
+  }) {
     this.#fallback = options.fallback;
     this.#rules = options.rules;
+    this.#grants = options.grants ?? [];
   }
 
   decide(
@@ -108,6 +124,11 @@ export class RulePolicy implements PolicyEngine {
     input: JsonValue,
     context: PolicyContext = {},
   ): PolicyDecision {
+    const grant = this.#grants.find((item) => matchesGrant(item, tool, context));
+    if (grant) {
+      return { type: "allow" };
+    }
+
     for (const rule of this.#rules) {
       if (matchesRule(rule, tool, context)) {
         if (rule.effect === "allow") {
@@ -153,6 +174,38 @@ function matchesRule(
   }
 
   if (rule.risks && (!context.risk || !rule.risks.has(context.risk))) {
+    return false;
+  }
+
+  if (rule.taskIds && (!context.taskId || !rule.taskIds.has(context.taskId))) {
+    return false;
+  }
+
+  return true;
+}
+
+function matchesGrant(
+  grant: TemporaryPolicyGrant,
+  tool: ToolDefinition,
+  context: PolicyContext,
+): boolean {
+  if (grant.expiresAt.getTime() <= Date.now()) {
+    return false;
+  }
+
+  if (!tool.capabilities.includes(grant.capability)) {
+    return false;
+  }
+
+  if (grant.pluginId && grant.pluginId !== context.pluginId) {
+    return false;
+  }
+
+  if (grant.taskId && grant.taskId !== context.taskId) {
+    return false;
+  }
+
+  if (grant.userId && grant.userId !== context.userId) {
     return false;
   }
 

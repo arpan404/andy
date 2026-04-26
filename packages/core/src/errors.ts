@@ -55,6 +55,22 @@ export class ToolApprovalRequiredError extends Schema.TaggedError<ToolApprovalRe
   },
 ) {}
 
+export class ToolInputSchemaInvalidError extends Schema.TaggedError<ToolInputSchemaInvalidError>()(
+  "ToolInputSchemaInvalidError",
+  {
+    toolName: Schema.String,
+    message: Schema.String,
+  },
+) {}
+
+export class ToolOutputSchemaInvalidError extends Schema.TaggedError<ToolOutputSchemaInvalidError>()(
+  "ToolOutputSchemaInvalidError",
+  {
+    toolName: Schema.String,
+    message: Schema.String,
+  },
+) {}
+
 export class PluginNotRegisteredError extends Schema.TaggedError<PluginNotRegisteredError>()(
   "PluginNotRegisteredError",
   {
@@ -268,6 +284,8 @@ export type AgentRuntimeError =
   | ToolNotRegisteredError
   | ToolPolicyDeniedError
   | ToolApprovalRequiredError
+  | ToolInputSchemaInvalidError
+  | ToolOutputSchemaInvalidError
   | PluginNotRegisteredError
   | PluginDisabledError
   | ToolExecutionError;

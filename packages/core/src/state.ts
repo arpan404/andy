@@ -2,6 +2,9 @@ import type { PluginRuntimeRecord } from "./runtime.js";
 import type { AgentSession } from "./types.js";
 import type { ApprovalRequest } from "./approvals.js";
 import type { BackgroundJob } from "./background.js";
+import type { TraceContext } from "./tracing.js";
+import type { EventEnvelope } from "./events.js";
+import type { SecretReference } from "./secrets.js";
 import { Effect } from "effect";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
@@ -13,6 +16,10 @@ export interface CoreStateSnapshot {
   sessions: readonly AgentSession[];
   approvals: readonly ApprovalRequest[];
   backgroundJobs: readonly BackgroundJob[];
+  auditTraces?: readonly TraceContext[];
+  events?: readonly EventEnvelope[];
+  config?: Record<string, unknown>;
+  secretReferences?: readonly Omit<SecretReference, "value">[];
 }
 
 export interface CoreStateStore {

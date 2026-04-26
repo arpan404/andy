@@ -10,6 +10,7 @@ export interface TraceContext {
 
 export class TraceManager {
   readonly #eventBus: InMemoryEventBus;
+  readonly #traces = new Map<string, TraceContext>();
 
   constructor(options: { eventBus: InMemoryEventBus }) {
     this.#eventBus = options.eventBus;
@@ -26,6 +27,7 @@ export class TraceManager {
       if (input.parentTraceId) {
         trace.parentTraceId = input.parentTraceId;
       }
+      self.#traces.set(trace.traceId, trace);
       const event = {
         type: "trace.started" as const,
         traceId: trace.traceId,
@@ -48,5 +50,30 @@ export class TraceManager {
         ...(trace.parentTraceId ? { parentTraceId: trace.parentTraceId } : {}),
       }),
     )();
+  }
+
+  child(input: { parent: TraceContext; name: string }): Effect.Effect<TraceContext> {
+    return this.start({
+      name: input.name,
+      parentTraceId: input.parent.traceId,
+    });
+  }
+
+  list(): readonly TraceContext[] {
+    return [...this.#traces.values()].sort(
+      (a, b) => a.startedAt.getTime() - b.startedAt.getTime(),
+    );
+  }
+
+  hydrate(traces: readonly TraceContext[]): Effect.Effect<void> {
+    return Effect.sync(() => {
+      this.#traces.clear();
+      for (const trace of traces) {
+        this.#traces.set(trace.traceId, {
+          ...trace,
+          startedAt: new Date(trace.startedAt),
+        });
+      }
+    });
   }
 }

@@ -4,13 +4,14 @@ import type { ApprovalManager, ApprovalRequest } from "./approvals.js";
 import {
   ApprovalDeniedError,
   ApprovalNotFoundError,
+  type AgentRuntimeError,
   type ApprovalAlreadyResolvedError,
 } from "./errors.js";
 import type { ToolExecutionResult } from "./types.js";
 
 export interface ParkedApprovalAction {
   approval: ApprovalRequest;
-  execute(): Effect.Effect<ToolExecutionResult>;
+  execute(): Effect.Effect<ToolExecutionResult, AgentRuntimeError>;
 }
 
 export class ApprovalResumeEngine {
@@ -23,7 +24,7 @@ export class ApprovalResumeEngine {
 
   park(
     approval: ApprovalRequest,
-    execute: () => Effect.Effect<ToolExecutionResult>,
+    execute: () => Effect.Effect<ToolExecutionResult, AgentRuntimeError>,
   ): Effect.Effect<ApprovalRequest> {
     return Effect.sync(() => {
       this.#parked.set(approval.id, { approval, execute });
@@ -35,7 +36,10 @@ export class ApprovalResumeEngine {
     approvalId: string,
   ): Effect.Effect<
     ToolExecutionResult,
-    ApprovalNotFoundError | ApprovalAlreadyResolvedError | ApprovalDeniedError
+    | ApprovalNotFoundError
+    | ApprovalAlreadyResolvedError
+    | ApprovalDeniedError
+    | AgentRuntimeError
   > {
     const self = this;
     return Effect.fn("ApprovalResumeEngine.resumeApproved")(function* () {
@@ -77,6 +81,30 @@ export class ApprovalResumeEngine {
       const approval = yield* self.#approvals.resolve(approvalId, "denied");
       self.#parked.delete(approvalId);
       return approval;
+    })();
+  }
+
+  expire(approvalId: string): Effect.Effect<ApprovalRequest | undefined> {
+    const self = this;
+    return Effect.fn("ApprovalResumeEngine.expire")(function* () {
+      const parked = self.#parked.get(approvalId);
+      self.#parked.delete(approvalId);
+      if (!parked) {
+        return undefined;
+      }
+
+      return yield* self.#approvals.expire(approvalId);
+    })();
+  }
+
+  clearExpired(): Effect.Effect<readonly ApprovalRequest[]> {
+    const self = this;
+    return Effect.fn("ApprovalResumeEngine.clearExpired")(function* () {
+      const expired = yield* self.#approvals.expirePending();
+      for (const approval of expired) {
+        self.#parked.delete(approval.id);
+      }
+      return expired;
     })();
   }
 

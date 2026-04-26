@@ -8,6 +8,7 @@ Andy treats plugins as untrusted code. The manifest is the plugin's maximum allo
 GitHub or marketplace source
   -> fetch manifest
   -> validate manifest
+  -> verify schemaVersion compatibility
   -> display capabilities and permissions
   -> pin source version
   -> install disabled or enable after approval
@@ -50,6 +51,8 @@ Every plugin must declare:
 - Block host API calls for undeclared capabilities before any target tool runs.
 - Treat swarm spawn/delegate/join/cancel as audited plugin actions.
 - Treat persistent user memory writes, memory deletion, and semantic indexing as audited plugin actions.
+- Validate declared tool input and output schemas at the runtime boundary.
+- Carry trace, session, user, channel, task, and cancellation metadata through policy and audit for correlation.
 - Prefer Markdown memory as the inspectable source of truth; treat vector or database-backed memory as indexes or alternate providers selected by the user.
 - Reject tools at host startup when their declared sandbox compatibility does not include the selected execution mode.
 - Tools that require host privileges must declare `sandbox.isolation: "unsandboxed"` and `sandbox.requiresHostPrivileges`.
@@ -123,11 +126,17 @@ Worker and subprocess plugins may request host APIs through the plugin RPC chann
 
 The default host API handler routes requests back through policy-gated runtime tools. This keeps sandboxed plugins from receiving direct core object references while still letting them request syscalls such as memory, filesystem, communication, secrets, background, or swarm.
 
+Subprocess transport enforces bounded message size and request timeouts. Production hosts should still prefer OS sandbox, container, or remote execution profiles for untrusted plugins because transport limits do not replace process confinement.
+
 ## Approval Resume
 
-Approval requests can be parked with the action they would run. After the user approves through a communication channel, the approval resume engine can execute the parked action and clear it. Denied approvals clear the parked action without running it.
+Approval requests are parked with the runtime tool action they would run. After the user approves through a communication channel, the approval resume engine executes the exact suspended action and clears it. Denied approvals clear the parked action without running it.
 
-The current implementation provides the core engine. Runtime-level automatic parking and durable restart recovery still need daemon wiring.
+Pending approvals can be expired and cleared from the parked-action table. Durable restart recovery still needs restart-safe action descriptors because in-memory closures cannot be serialized.
+
+## Lifecycle
+
+Hosted plugins should be started through the core lifecycle manager. The manager starts the selected host, registers the hosted proxy tools with the runtime, audits lifecycle events, and stops handles during shutdown. If runtime registration fails, the host handle is stopped so plugin code is not left running without registered policy gates.
 
 ## Upgrade Rule
 

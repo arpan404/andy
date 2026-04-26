@@ -4,6 +4,8 @@ import { CapabilityPolicy } from "@andy/policy";
 import { Effect } from "effect";
 import { describe, expect, test } from "bun:test";
 import { AgentRuntime } from "./runtime.js";
+import { ApprovalManager } from "./approvals.js";
+import { ApprovalResumeEngine } from "./approval-resume.js";
 import { createRuntime, registerMemorySavePlugin } from "./test-helpers.js";
 
 describe("AgentRuntime tool names", () => {
@@ -271,5 +273,114 @@ describe("AgentRuntime tool names", () => {
     const result = await Effect.runPromise(runtime.executeTool("desktop.keyboard", {}));
 
     expect(result.output).toEqual({ typed: true });
+  });
+
+  test("parks approval-gated tool calls and resumes the exact action", async () => {
+    const audit = new ConsoleAuditSink();
+    const approvals = new ApprovalManager({ audit });
+    const approvalResume = new ApprovalResumeEngine({ approvals });
+    let executionCount = 0;
+    const runtime = new AgentRuntime({
+      audit,
+      approvalManager: approvals,
+      approvalResume,
+      policy: new CapabilityPolicy({
+        allowedCapabilities: new Set(["memory.save"]),
+        approvalRequiredCapabilities: new Set(["memory.save"]),
+      }),
+    });
+    await Effect.runPromise(
+      runtime.registerPlugin(
+        definePlugin({
+          id: "andy.memory.markdown",
+          name: "Markdown Memory",
+          version: "0.1.0",
+          capabilities: ["memory.save"],
+          tools: [
+            defineTool({
+              name: "memory.save",
+              description: "Save memory",
+              capabilities: ["memory.save"],
+              risk: "medium",
+              execute(input) {
+                executionCount += 1;
+                return Effect.succeed({ saved: input });
+              },
+            }),
+          ],
+        }),
+      ),
+    );
+
+    const requested = await Effect.runPromiseExit(
+      runtime.executeTool("memory.save", { key: "city", value: "Kathmandu" }),
+    );
+    const [approval] = approvals.list();
+
+    expect(requested._tag).toBe("Failure");
+    expect(executionCount).toBe(0);
+    expect(approval).toBeDefined();
+    expect(approvalResume.listParked()).toHaveLength(1);
+
+    const resumed = await Effect.runPromise(
+      approvalResume.resumeApproved(approval?.id ?? ""),
+    );
+
+    expect(resumed.output).toEqual({
+      saved: { key: "city", value: "Kathmandu" },
+    });
+    expect(executionCount).toBe(1);
+    expect(approvalResume.listParked()).toHaveLength(0);
+  });
+
+  test("validates tool input and output schemas at the runtime boundary", async () => {
+    const runtime = new AgentRuntime({
+      audit: new ConsoleAuditSink(),
+      policy: new CapabilityPolicy({
+        allowedCapabilities: new Set(["memory.save"]),
+      }),
+    });
+    await Effect.runPromise(
+      runtime.registerPlugin(
+        definePlugin({
+          id: "andy.schema",
+          name: "Schema Test",
+          version: "0.1.0",
+          capabilities: ["memory.save"],
+          tools: [
+            defineTool({
+              name: "memory.save",
+              description: "Save memory",
+              capabilities: ["memory.save"],
+              risk: "medium",
+              inputSchema: {
+                type: "object",
+                required: ["key"],
+                properties: {
+                  key: { type: "string" },
+                },
+              },
+              outputSchema: {
+                type: "object",
+                required: ["saved"],
+              },
+              execute(input) {
+                return Effect.succeed({ saved: input });
+              },
+            }),
+          ],
+        }),
+      ),
+    );
+
+    const invalid = await Effect.runPromiseExit(
+      runtime.executeTool("andy.schema.memory.save", { value: "missing key" }),
+    );
+    const valid = await Effect.runPromise(
+      runtime.executeTool("andy.schema.memory.save", { key: "city" }),
+    );
+
+    expect(invalid._tag).toBe("Failure");
+    expect(valid.output).toEqual({ saved: { key: "city" } });
   });
 });

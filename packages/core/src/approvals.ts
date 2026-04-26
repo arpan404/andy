@@ -129,4 +129,76 @@ export class ApprovalManager {
       (a, b) => a.createdAt.getTime() - b.createdAt.getTime(),
     );
   }
+
+  expirePending(now = new Date()): Effect.Effect<readonly ApprovalRequest[]> {
+    const self = this;
+    return Effect.fn("ApprovalManager.expirePending")(function* () {
+      const expired: ApprovalRequest[] = [];
+      for (const request of self.#requests.values()) {
+        if (request.status !== "pending") {
+          continue;
+        }
+
+        const resolved: ApprovalRequest = {
+          ...request,
+          status: "expired",
+          resolvedAt: now,
+        };
+        self.#requests.set(request.id, resolved);
+        expired.push(resolved);
+        yield* self.#audit.record({
+          type: "approval.expired",
+          approvalId: request.id,
+          runId: request.runId,
+          toolName: request.toolName,
+        });
+      }
+
+      return expired;
+    })();
+  }
+
+  expire(
+    approvalId: string,
+    now = new Date(),
+  ): Effect.Effect<ApprovalRequest | undefined> {
+    const self = this;
+    return Effect.fn("ApprovalManager.expire")(function* () {
+      const request = self.#requests.get(approvalId);
+      if (!request || request.status !== "pending") {
+        return undefined;
+      }
+
+      const expired: ApprovalRequest = {
+        ...request,
+        status: "expired",
+        resolvedAt: now,
+      };
+      self.#requests.set(approvalId, expired);
+      yield* self.#audit.record({
+        type: "approval.expired",
+        approvalId: request.id,
+        runId: request.runId,
+        toolName: request.toolName,
+      });
+      return expired;
+    })();
+  }
+
+  hydrate(requests: readonly ApprovalRequest[]): Effect.Effect<void> {
+    return Effect.sync(() => {
+      this.#requests.clear();
+      for (const request of requests) {
+        this.#requests.set(request.id, normalizeApprovalDates(request));
+      }
+    });
+  }
+}
+
+function normalizeApprovalDates(request: ApprovalRequest): ApprovalRequest {
+  return {
+    ...request,
+    createdAt: new Date(request.createdAt),
+    ...(request.resolvedAt ? { resolvedAt: new Date(request.resolvedAt) } : {}),
+  };
 }
