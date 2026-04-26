@@ -25,7 +25,10 @@ Every plugin must declare:
 - tool definitions
 - network hosts when network is needed
 - filesystem roots when real filesystem access is needed
+- sensitive filesystem roots, reasons, and data classes when OS-level, app-level, or private user data is needed
 - secret scopes when credentials are needed
+- swarm limits when spawning or delegating to other agents is needed
+- memory scopes, namespaces, retention, and semantic-search behavior when storing or retrieving memory
 
 ## Runtime Enforcement
 
@@ -34,9 +37,13 @@ Every plugin must declare:
 - Expose only approved APIs to plugin context.
 - Keep scratch work in the virtual filesystem by default.
 - Require scoped roots for real filesystem access.
+- Require `filesystem.read_sensitive` plus `permissions.filesystem.sensitiveReadRoots` for OS folders, app folders, browser profiles, message stores, credentials, and other private user data.
 - Require allowlisted hosts for network access.
 - Require secret broker access for credentials.
 - Audit install and execution lifecycle events.
+- Treat swarm spawn/delegate/join/cancel as audited plugin actions.
+- Treat persistent user memory writes, memory deletion, and semantic indexing as audited plugin actions.
+- Prefer Markdown memory as the inspectable source of truth; treat vector or database-backed memory as indexes or alternate providers selected by the user.
 
 ## Execution Levels
 

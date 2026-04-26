@@ -12,7 +12,8 @@
     "check": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@andy/vfs": "workspace:*"
+    "@andy/vfs": "workspace:*",
+    "effect": "^3.21.2"
   },
   "devDependencies": {
     "typescript": "^5.9.3"

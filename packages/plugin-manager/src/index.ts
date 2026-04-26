@@ -70,6 +70,15 @@ function diffPermissions(
     changes.push(`filesystem.read:${root}`);
   }
 
+  const previousSensitiveReadRoots =
+    previous?.permissions?.filesystem?.sensitiveReadRoots?.map((root) => root.path) ??
+    [];
+  const nextSensitiveReadRoots =
+    next.permissions?.filesystem?.sensitiveReadRoots?.map((root) => root.path) ?? [];
+  for (const root of diffList(previousSensitiveReadRoots, nextSensitiveReadRoots)) {
+    changes.push(`filesystem.read_sensitive:${root}`);
+  }
+
   const previousWriteRoots = previous?.permissions?.filesystem?.writeRoots ?? [];
   const nextWriteRoots = next.permissions?.filesystem?.writeRoots ?? [];
   for (const root of diffList(previousWriteRoots, nextWriteRoots)) {

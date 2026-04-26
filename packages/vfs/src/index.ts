@@ -1,6 +1,7 @@
 import { constants as fsConstants } from "node:fs";
 import realFs from "node:fs/promises";
 import path from "node:path";
+import { Effect, Schema } from "effect";
 import { createFsFromVolume, Volume } from "memfs";
 
 export interface FileStat {
@@ -10,14 +11,35 @@ export interface FileStat {
   modifiedAt: Date;
 }
 
+export class FileSystemAccessError extends Schema.TaggedError<FileSystemAccessError>()(
+  "FileSystemAccessError",
+  {
+    operation: Schema.String,
+    path: Schema.String,
+    message: Schema.String,
+    cause: Schema.optional(Schema.String),
+  },
+) {}
+
+export class FileSystemPathEscapeError extends Schema.TaggedError<FileSystemPathEscapeError>()(
+  "FileSystemPathEscapeError",
+  {
+    root: Schema.String,
+    path: Schema.String,
+    message: Schema.String,
+  },
+) {}
+
+export type FileSystemError = FileSystemAccessError | FileSystemPathEscapeError;
+
 export interface AgentFileSystem {
-  readFile(filePath: string): Promise<string>;
-  writeFile(filePath: string, contents: string): Promise<void>;
-  mkdir(dirPath: string): Promise<void>;
-  readdir(dirPath: string): Promise<string[]>;
-  stat(filePath: string): Promise<FileStat>;
-  exists(filePath: string): Promise<boolean>;
-  rm(filePath: string): Promise<void>;
+  readFile(filePath: string): Effect.Effect<string, FileSystemError>;
+  writeFile(filePath: string, contents: string): Effect.Effect<void, FileSystemError>;
+  mkdir(dirPath: string): Effect.Effect<void, FileSystemError>;
+  readdir(dirPath: string): Effect.Effect<string[], FileSystemError>;
+  stat(filePath: string): Effect.Effect<FileStat, FileSystemError>;
+  exists(filePath: string): Effect.Effect<boolean>;
+  rm(filePath: string): Effect.Effect<void, FileSystemError>;
 }
 
 export interface MemoryFileSystemOptions {
@@ -54,54 +76,91 @@ export class MemoryFileSystem implements AgentFileSystem {
     return resolvedPath;
   }
 
-  async readFile(filePath: string): Promise<string> {
-    const contents = await this.#fs.readFile(this.resolve(filePath), {
-      encoding: "utf8",
+  readFile(filePath: string): Effect.Effect<string, FileSystemError> {
+    const self = this;
+    return Effect.fn("MemoryFileSystem.readFile")(function* () {
+      const absolutePath = yield* resolveVirtualPath(self.#cwd, filePath);
+      const contents = yield* tryFs("readFile", filePath, () =>
+        self.#fs.readFile(absolutePath, { encoding: "utf8" }),
+      );
+      return String(contents);
+    })();
+  }
+
+  writeFile(filePath: string, contents: string): Effect.Effect<void, FileSystemError> {
+    const self = this;
+    return Effect.fn("MemoryFileSystem.writeFile")(function* () {
+      const absolutePath = yield* resolveVirtualPath(self.#cwd, filePath);
+      yield* tryFs("mkdir", path.posix.dirname(absolutePath), () =>
+        self.#fs.mkdir(path.posix.dirname(absolutePath), { recursive: true }),
+      );
+      yield* tryFs("writeFile", filePath, () =>
+        self.#fs.writeFile(absolutePath, contents, { encoding: "utf8" }),
+      );
+    })();
+  }
+
+  mkdir(dirPath: string): Effect.Effect<void, FileSystemError> {
+    const self = this;
+    return Effect.fn("MemoryFileSystem.mkdir")(function* () {
+      const absolutePath = yield* resolveVirtualPath(self.#cwd, dirPath);
+      yield* tryFs("mkdir", dirPath, () =>
+        self.#fs.mkdir(absolutePath, { recursive: true }),
+      );
+    })();
+  }
+
+  readdir(dirPath: string): Effect.Effect<string[], FileSystemError> {
+    const self = this;
+    return Effect.fn("MemoryFileSystem.readdir")(function* () {
+      const absolutePath = yield* resolveVirtualPath(self.#cwd, dirPath);
+      const entries = yield* tryFs("readdir", dirPath, () =>
+        self.#fs.readdir(absolutePath, { encoding: "utf8" }),
+      );
+      return entries.map((entry) => String(entry));
+    })();
+  }
+
+  stat(filePath: string): Effect.Effect<FileStat, FileSystemError> {
+    const self = this;
+    return Effect.fn("MemoryFileSystem.stat")(function* () {
+      const absolutePath = yield* resolveVirtualPath(self.#cwd, filePath);
+      const stat = yield* tryFs("stat", filePath, () => self.#fs.stat(absolutePath));
+      return {
+        size: Number(stat.size),
+        isDirectory: stat.isDirectory(),
+        isFile: stat.isFile(),
+        modifiedAt: stat.mtime,
+      };
+    })();
+  }
+
+  exists(filePath: string): Effect.Effect<boolean> {
+    return Effect.promise(async () => {
+      try {
+        const absolutePath = path.posix.resolve(this.#cwd, filePath);
+        if (!isWithinPath(this.#cwd, absolutePath)) {
+          return false;
+        }
+        await this.#fs.access(absolutePath, fsConstants.F_OK);
+        return true;
+      } catch {
+        return false;
+      }
     });
-    return String(contents);
   }
 
-  async writeFile(filePath: string, contents: string): Promise<void> {
-    const absolutePath = this.resolve(filePath);
-    await this.#fs.mkdir(path.posix.dirname(absolutePath), { recursive: true });
-    await this.#fs.writeFile(absolutePath, contents, { encoding: "utf8" });
-  }
-
-  async mkdir(dirPath: string): Promise<void> {
-    await this.#fs.mkdir(this.resolve(dirPath), { recursive: true });
-  }
-
-  async readdir(dirPath: string): Promise<string[]> {
-    const entries = await this.#fs.readdir(this.resolve(dirPath), {
-      encoding: "utf8",
-    });
-    return entries.map((entry) => String(entry));
-  }
-
-  async stat(filePath: string): Promise<FileStat> {
-    const stat = await this.#fs.stat(this.resolve(filePath));
-    return {
-      size: Number(stat.size),
-      isDirectory: stat.isDirectory(),
-      isFile: stat.isFile(),
-      modifiedAt: stat.mtime,
-    };
-  }
-
-  async exists(filePath: string): Promise<boolean> {
-    try {
-      await this.#fs.access(this.resolve(filePath), fsConstants.F_OK);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  async rm(filePath: string): Promise<void> {
-    await this.#fs.rm(this.resolve(filePath), {
-      force: true,
-      recursive: true,
-    });
+  rm(filePath: string): Effect.Effect<void, FileSystemError> {
+    const self = this;
+    return Effect.fn("MemoryFileSystem.rm")(function* () {
+      const absolutePath = yield* resolveVirtualPath(self.#cwd, filePath);
+      yield* tryFs("rm", filePath, () =>
+        self.#fs.rm(absolutePath, {
+          force: true,
+          recursive: true,
+        }),
+      );
+    })();
   }
 
   toJSON(): Record<string, string | null> {
@@ -129,48 +188,89 @@ export class RealFileSystem implements AgentFileSystem {
     return resolvedPath;
   }
 
-  async readFile(filePath: string): Promise<string> {
-    return realFs.readFile(this.resolve(filePath), "utf8");
+  readFile(filePath: string): Effect.Effect<string, FileSystemError> {
+    const self = this;
+    return Effect.fn("RealFileSystem.readFile")(function* () {
+      const absolutePath = yield* resolveRealPath(self.#root, filePath);
+      return yield* tryFs("readFile", filePath, () =>
+        realFs.readFile(absolutePath, "utf8"),
+      );
+    })();
   }
 
-  async writeFile(filePath: string, contents: string): Promise<void> {
-    const absolutePath = this.resolve(filePath);
-    await realFs.mkdir(path.dirname(absolutePath), { recursive: true });
-    await realFs.writeFile(absolutePath, contents, "utf8");
+  writeFile(filePath: string, contents: string): Effect.Effect<void, FileSystemError> {
+    const self = this;
+    return Effect.fn("RealFileSystem.writeFile")(function* () {
+      const absolutePath = yield* resolveRealPath(self.#root, filePath);
+      yield* tryFs("mkdir", path.dirname(absolutePath), () =>
+        realFs.mkdir(path.dirname(absolutePath), { recursive: true }),
+      );
+      yield* tryFs("writeFile", filePath, () =>
+        realFs.writeFile(absolutePath, contents, "utf8"),
+      );
+    })();
   }
 
-  async mkdir(dirPath: string): Promise<void> {
-    await realFs.mkdir(this.resolve(dirPath), { recursive: true });
+  mkdir(dirPath: string): Effect.Effect<void, FileSystemError> {
+    const self = this;
+    return Effect.fn("RealFileSystem.mkdir")(function* () {
+      const absolutePath = yield* resolveRealPath(self.#root, dirPath);
+      yield* tryFs("mkdir", dirPath, () =>
+        realFs.mkdir(absolutePath, { recursive: true }),
+      );
+    })();
   }
 
-  async readdir(dirPath: string): Promise<string[]> {
-    return realFs.readdir(this.resolve(dirPath), "utf8");
+  readdir(dirPath: string): Effect.Effect<string[], FileSystemError> {
+    const self = this;
+    return Effect.fn("RealFileSystem.readdir")(function* () {
+      const absolutePath = yield* resolveRealPath(self.#root, dirPath);
+      return yield* tryFs("readdir", dirPath, () =>
+        realFs.readdir(absolutePath, "utf8"),
+      );
+    })();
   }
 
-  async stat(filePath: string): Promise<FileStat> {
-    const stat = await realFs.stat(this.resolve(filePath));
-    return {
-      size: stat.size,
-      isDirectory: stat.isDirectory(),
-      isFile: stat.isFile(),
-      modifiedAt: stat.mtime,
-    };
+  stat(filePath: string): Effect.Effect<FileStat, FileSystemError> {
+    const self = this;
+    return Effect.fn("RealFileSystem.stat")(function* () {
+      const absolutePath = yield* resolveRealPath(self.#root, filePath);
+      const stat = yield* tryFs("stat", filePath, () => realFs.stat(absolutePath));
+      return {
+        size: stat.size,
+        isDirectory: stat.isDirectory(),
+        isFile: stat.isFile(),
+        modifiedAt: stat.mtime,
+      };
+    })();
   }
 
-  async exists(filePath: string): Promise<boolean> {
-    try {
-      await realFs.access(this.resolve(filePath), fsConstants.F_OK);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  async rm(filePath: string): Promise<void> {
-    await realFs.rm(this.resolve(filePath), {
-      force: true,
-      recursive: true,
+  exists(filePath: string): Effect.Effect<boolean> {
+    return Effect.promise(async () => {
+      try {
+        const absolutePath = path.resolve(this.#root, filePath);
+        if (!isWithinPath(this.#root, absolutePath)) {
+          return false;
+        }
+        await realFs.access(absolutePath, fsConstants.F_OK);
+        return true;
+      } catch {
+        return false;
+      }
     });
+  }
+
+  rm(filePath: string): Effect.Effect<void, FileSystemError> {
+    const self = this;
+    return Effect.fn("RealFileSystem.rm")(function* () {
+      const absolutePath = yield* resolveRealPath(self.#root, filePath);
+      yield* tryFs("rm", filePath, () =>
+        realFs.rm(absolutePath, {
+          force: true,
+          recursive: true,
+        }),
+      );
+    })();
   }
 }
 
@@ -190,4 +290,63 @@ function isWithinPath(root: string, candidate: string): boolean {
     relativePath.length === 0 ||
     (!relativePath.startsWith("..") && !path.isAbsolute(relativePath))
   );
+}
+
+function resolveVirtualPath(
+  root: string,
+  filePath: string,
+): Effect.Effect<string, FileSystemPathEscapeError> {
+  return Effect.sync(() => path.posix.resolve(root, filePath)).pipe(
+    Effect.flatMap((candidate) =>
+      isWithinPath(root, candidate)
+        ? Effect.succeed(candidate)
+        : Effect.fail(
+            new FileSystemPathEscapeError({
+              root,
+              path: filePath,
+              message: `Path '${filePath}' escapes virtual filesystem root.`,
+            }),
+          ),
+    ),
+  );
+}
+
+function resolveRealPath(
+  root: string,
+  filePath: string,
+): Effect.Effect<string, FileSystemPathEscapeError> {
+  return Effect.sync(() => path.resolve(root, filePath)).pipe(
+    Effect.flatMap((candidate) =>
+      isWithinPath(root, candidate)
+        ? Effect.succeed(candidate)
+        : Effect.fail(
+            new FileSystemPathEscapeError({
+              root,
+              path: filePath,
+              message: `Path '${filePath}' escapes filesystem root.`,
+            }),
+          ),
+    ),
+  );
+}
+
+function tryFs<A>(
+  operation: string,
+  filePath: string,
+  run: () => Promise<A>,
+): Effect.Effect<A, FileSystemAccessError> {
+  return Effect.tryPromise({
+    try: run,
+    catch: (cause) =>
+      new FileSystemAccessError({
+        operation,
+        path: filePath,
+        message: `Filesystem operation '${operation}' failed for '${filePath}'.`,
+        cause: stringifyCause(cause),
+      }),
+  });
+}
+
+function stringifyCause(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
 }

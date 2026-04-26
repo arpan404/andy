@@ -1,7 +1,14 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.4.13/schema.json",
   "files": {
-    "includes": ["**", "!**/dist", "!node_modules", "!.references", "!**/*.lock"]
+    "includes": [
+      "**",
+      "!**/dist",
+      "!node_modules",
+      "!.references",
+      "!.agents",
+      "!**/*.lock"
+    ]
   },
   "formatter": {
     "enabled": false

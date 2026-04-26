@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { Effect } from "effect";
 import { createScratchFileSystem, RealFileSystem } from "./index.js";
 
 describe("MemoryFileSystem", () => {
@@ -9,20 +10,23 @@ describe("MemoryFileSystem", () => {
       },
     });
 
-    await fs.writeFile("notes/output.txt", "world");
+    await Effect.runPromise(fs.writeFile("notes/output.txt", "world"));
 
-    expect(await fs.readFile("notes/input.txt")).toBe("hello");
-    expect(await fs.readFile("notes/output.txt")).toBe("world");
-    expect(await fs.exists("notes/output.txt")).toBe(true);
-    expect(await fs.readdir("notes")).toEqual(["input.txt", "output.txt"]);
+    expect(await Effect.runPromise(fs.readFile("notes/input.txt"))).toBe("hello");
+    expect(await Effect.runPromise(fs.readFile("notes/output.txt"))).toBe("world");
+    expect(await Effect.runPromise(fs.exists("notes/output.txt"))).toBe(true);
+    expect(await Effect.runPromise(fs.readdir("notes"))).toEqual([
+      "input.txt",
+      "output.txt",
+    ]);
   });
 
   test("prevents path escapes", async () => {
     const fs = createScratchFileSystem();
 
-    await expect(fs.writeFile("../escape.txt", "no")).rejects.toThrow(
-      "escapes virtual filesystem root",
-    );
+    await expect(
+      Effect.runPromise(fs.writeFile("../escape.txt", "no")),
+    ).rejects.toThrow("escapes virtual filesystem root");
   });
 });
 
@@ -30,7 +34,7 @@ describe("RealFileSystem", () => {
   test("prevents scoped root escapes", async () => {
     const fs = new RealFileSystem({ root: "/tmp/andy-vfs-test" });
 
-    await expect(fs.readFile("../escape.txt")).rejects.toThrow(
+    await expect(Effect.runPromise(fs.readFile("../escape.txt"))).rejects.toThrow(
       "escapes filesystem root",
     );
   });

@@ -1,4 +1,6 @@
 import type { AgentFileSystem } from "@andy/vfs";
+import type { Effect } from "effect";
+import { Schema } from "effect";
 
 export type RiskLevel = "low" | "medium" | "high" | "critical";
 
@@ -15,7 +17,7 @@ export interface ToolDefinition<TInput = unknown, TOutput = unknown> {
   description: string;
   capabilities: Capability[];
   risk: RiskLevel;
-  execute(input: TInput, context: ToolContext): Promise<TOutput> | TOutput;
+  execute(input: TInput, context: ToolContext): Effect.Effect<TOutput, unknown>;
 }
 
 export interface PluginDefinition {
@@ -24,6 +26,7 @@ export interface PluginDefinition {
   version: string;
   source?: PluginSource;
   capabilities: Capability[];
+  permissions?: PluginPermissions;
   tools: ToolDefinition[];
 }
 
@@ -41,6 +44,8 @@ export interface PluginManifest {
   risk: RiskLevel;
   source?: PluginSource;
   permissions?: PluginPermissions;
+  swarm?: SwarmManifest;
+  memory?: MemoryManifest;
 }
 
 export interface PluginPermissions {
@@ -50,8 +55,66 @@ export interface PluginPermissions {
   filesystem?: {
     readRoots?: string[];
     writeRoots?: string[];
+    sensitiveReadRoots?: SensitiveFilesystemRoot[];
   };
 }
+
+export interface SwarmManifest {
+  maxAgents: number;
+  maxDepth: number;
+  allowedAgentRoles: string[];
+  allowedCapabilities: Capability[];
+  requiresApprovalAboveAgents?: number;
+}
+
+export interface MemoryManifest {
+  scopes: MemoryScope[];
+  namespaces: string[];
+  retention: "ephemeral" | "persistent" | "user_controlled";
+  semanticSearch?: boolean;
+  requiresApprovalForScopes?: MemoryScope[];
+}
+
+export type MemoryScope = "user" | "project" | "session" | "agent" | "plugin";
+
+export interface SensitiveFilesystemRoot {
+  path: string;
+  reason: string;
+  dataClasses: SensitiveDataClass[];
+}
+
+export type SensitiveDataClass =
+  | "os"
+  | "app_data"
+  | "credentials"
+  | "browser_profile"
+  | "messages"
+  | "contacts"
+  | "calendar"
+  | "photos"
+  | "health"
+  | "financial"
+  | "other";
+
+export class PluginToolCapabilityUndeclaredError extends Schema.TaggedError<PluginToolCapabilityUndeclaredError>()(
+  "PluginToolCapabilityUndeclaredError",
+  {
+    pluginId: Schema.String,
+    toolName: Schema.String,
+    capability: Schema.String,
+    message: Schema.String,
+  },
+) {}
+
+export class PluginSensitiveFilesystemUndeclaredError extends Schema.TaggedError<PluginSensitiveFilesystemUndeclaredError>()(
+  "PluginSensitiveFilesystemUndeclaredError",
+  {
+    pluginId: Schema.String,
+    toolName: Schema.String,
+    capability: Schema.String,
+    message: Schema.String,
+  },
+) {}
 
 export function assertManifestBoundPlugin(plugin: PluginDefinition): void {
   const declaredCapabilities = new Set(plugin.capabilities);
@@ -59,9 +122,24 @@ export function assertManifestBoundPlugin(plugin: PluginDefinition): void {
   for (const tool of plugin.tools) {
     for (const capability of tool.capabilities) {
       if (!declaredCapabilities.has(capability)) {
-        throw new Error(
-          `Plugin '${plugin.id}' tool '${tool.name}' requests undeclared capability '${capability}'.`,
-        );
+        throw new PluginToolCapabilityUndeclaredError({
+          pluginId: plugin.id,
+          toolName: tool.name,
+          capability,
+          message: `Plugin '${plugin.id}' tool '${tool.name}' requests undeclared capability '${capability}'.`,
+        });
+      }
+
+      if (
+        capability === "filesystem.read_sensitive" &&
+        (plugin.permissions?.filesystem?.sensitiveReadRoots?.length ?? 0) === 0
+      ) {
+        throw new PluginSensitiveFilesystemUndeclaredError({
+          pluginId: plugin.id,
+          toolName: tool.name,
+          capability,
+          message: `Plugin '${plugin.id}' tool '${tool.name}' requests sensitive filesystem access without declaring permissions.filesystem.sensitiveReadRoots.`,
+        });
       }
     }
   }

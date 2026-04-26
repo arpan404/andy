@@ -21,6 +21,15 @@ Every product feature must be implemented as a plugin or as a minimal core inter
 - Keep workspaces declared in the root `package.json`.
 - Prefer TypeScript for runtime, tools, plugins, tests, and scripts.
 
+## Effect TS
+
+- Use Effect TS for runtime code.
+- Async, fallible, filesystem, network, plugin, memory, audit, and tool execution APIs should return `Effect.Effect`, not raw `Promise`.
+- Run effects only at application boundaries such as CLI entrypoints, tests, and future HTTP/webhook handlers.
+- Prefer `Effect.gen`, `Effect.fn`, typed errors, services/layers for business logic, and structured Effect logging.
+- Do not introduce new ad hoc async/throw/catch flows when an Effect error channel can model the failure.
+- Keep `@effect/language-service` configured in TypeScript.
+
 ## Product Direction
 
 Andy should feel like a secure, extensible Jarvis-style agent system: voice-aware, vision-aware, computer-controlling, background-capable, externally connected, observable, and powerful enough to control local and external systems through explicit permissions.
@@ -61,6 +70,7 @@ Operational power belongs in plugins:
 - voice input and output
 - vision and screen understanding
 - background jobs and schedulers
+- multi-agent swarm orchestration
 - notifications
 - email, calendar, messaging, GitHub, and other external services
 - memory providers
@@ -88,6 +98,8 @@ First-class agent capability requirements:
 - voice-output plugin for text-to-speech and interruption-aware responses
 - background-worker plugin for long-running tasks, scheduled jobs, retries, and resumable work
 - notification plugin for local and remote alerts, approval prompts, and task completion updates
+- swarm-orchestrator plugin for spawning, delegating to, joining, and cancelling multiple bounded agents when useful
+- markdown-memory, persistent-memory, and semantic-memory plugins for saving, fetching, querying, and forgetting long-term memory
 
 These capabilities must be composable. For example, a remote WhatsApp message can start a background task, the background task can use browser/computer-control plugins, a vision plugin can inspect a screenshot, and a notification plugin can ask the user for approval before an external action.
 
@@ -133,10 +145,13 @@ Every plugin must declare:
 - typed inputs and outputs
 - source provenance when installed from GitHub or marketplace
 - network, filesystem, secret, and external-service permissions when needed
+- sensitive filesystem roots with reason and data classes when reading OS-level, app-level, or private user data
+- memory scopes, namespaces, retention behavior, and semantic-search support when storing or retrieving memory
 
 Capabilities should be granular, for example:
 
 - `filesystem.read`
+- `filesystem.read_sensitive`
 - `filesystem.write`
 - `filesystem.delete`
 - `shell.execute`
@@ -150,6 +165,13 @@ Capabilities should be granular, for example:
 - `calendar.write`
 - `memory.read`
 - `memory.write`
+- `memory.fetch`
+- `memory.save`
+- `memory.query`
+- `memory.semantic_query`
+- `memory.embed`
+- `memory.forget`
+- `memory.list`
 - `microphone.read`
 - `speaker.speak`
 - `camera.read`
@@ -167,6 +189,11 @@ Capabilities should be granular, for example:
 - `background.run`
 - `background.schedule`
 - `background.cancel`
+- `swarm.plan`
+- `swarm.spawn`
+- `swarm.delegate`
+- `swarm.join`
+- `swarm.cancel`
 - `notification.send`
 - `notification.approval_request`
 - `messaging.receive`
@@ -222,6 +249,7 @@ Secure execution requirements:
 - Plugin execution context should expose only approved host APIs, not raw unrestricted `fs`, shell, network, secrets, or desktop control.
 - Network access must be host allowlisted by manifest and policy.
 - Filesystem access must use scoped roots or virtual scratch files.
+- Sensitive filesystem reads must use `filesystem.read_sensitive` and explicitly declare `permissions.filesystem.sensitiveReadRoots`.
 - Secrets must come from the secret broker and only for declared secret scopes.
 - Audit plugin install, enable, disable, upgrade, permission change, tool request, policy decision, and execution result.
 
@@ -246,6 +274,30 @@ Vision, voice, computer-control, and background rules:
 - Long-running background jobs must not hold elevated permissions indefinitely. Re-check policy before each tool action.
 - Notifications and approval prompts are plugins, but approval decisions must be recorded by core audit/policy interfaces.
 
+Swarm orchestration rules:
+
+- Multi-agent swarms must be implemented through a plugin such as `andy.swarm-orchestrator`, not hardcoded into core.
+- Swarm plugins must declare maximum agent count, maximum delegation depth, allowed agent roles, and allowed capabilities.
+- Spawning additional agents is a policy-relevant action and must be audited.
+- Swarm agents inherit only the capabilities explicitly granted by the swarm plugin and policy decision.
+- Swarm agents must not gain broader filesystem, shell, network, messaging, computer-control, or secret access than the parent task.
+- Swarm plugins must support cancellation and join/summary behavior so background child agents do not run indefinitely.
+- User approval is required when a swarm exceeds the plugin's configured approval threshold or requests high-risk capabilities.
+
+Memory plugin rules:
+
+- Memory is a plugin-provided capability, not hardcoded product behavior.
+- Prefer Markdown-backed memory files as the default persistent memory format so the user and agent can inspect, edit, diff, and review memory directly.
+- The agent must be able to manage its own memory through memory plugins: save, fetch, query, list, and forget.
+- Persistent memory plugins must declare supported scopes, namespaces, retention behavior, and whether semantic search is enabled.
+- Supported memory scopes are `user`, `project`, `session`, `agent`, and `plugin`.
+- Saving user-scope memory is policy-relevant and should require approval unless explicitly preauthorized.
+- Plugins must support fetching, querying, saving, and forgetting memory through declared capabilities.
+- Semantic/vector memory should be treated as an index over inspectable memory, not the only source of truth.
+- Untrusted content must not directly write trusted memory. Store it as `untrusted` or require review before promoting it.
+- Users must be able to inspect and delete persistent memories.
+- Memory providers must preserve provenance: source plugin, source tool, timestamp, trust level, and scope.
+
 ## LLM Backend
 
 - Use a replaceable TypeScript model-provider layer, not a heavyweight agent framework as the core.
@@ -257,6 +309,7 @@ Vision, voice, computer-control, and background rules:
 
 - No tool runs without declared capabilities.
 - No plugin receives blanket filesystem, shell, network, secret, or desktop access.
+- Plugins that need OS-level folders, other app folders, browser profiles, message stores, credentials, or other private user data must explicitly declare those sensitive roots in the manifest. The runner must block access when the manifest does not declare the sensitive root.
 - Treat all installed plugins as untrusted unless explicitly marked first-party and reviewed.
 - Manifest declarations are upper bounds, not automatic permission grants.
 - Risky or irreversible actions require explicit approval unless narrowly preauthorized.
@@ -270,6 +323,7 @@ Vision, voice, computer-control, and background rules:
 - Use `@andy/vfs` for agent scratch files and scoped real filesystem access.
 - Temporary agent artifacts should go into the in-memory scratch filesystem by default.
 - Real filesystem access must use scoped roots and policy-gated capabilities.
+- Sensitive filesystem access must use explicit sensitive root declarations with a reason and data classes. It is never covered by broad `filesystem.read`.
 - Plugins should receive filesystem access through runtime context or explicit filesystem plugins, not by importing host `fs` directly for user data.
 - Treat commits from virtual scratch space to real disk as policy-relevant writes.
 

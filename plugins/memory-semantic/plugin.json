@@ -1,0 +1,21 @@
+{
+  "id": "andy.memory.semantic",
+  "name": "Semantic Memory",
+  "version": "0.1.0",
+  "entry": "./dist/index.js",
+  "capabilities": [
+    "memory.embed",
+    "memory.semantic_query",
+    "memory.save",
+    "memory.fetch",
+    "memory.forget"
+  ],
+  "risk": "high",
+  "memory": {
+    "scopes": ["user", "project", "agent", "plugin"],
+    "namespaces": ["knowledge", "projects", "documents", "contacts"],
+    "retention": "user_controlled",
+    "semanticSearch": true,
+    "requiresApprovalForScopes": ["user"]
+  }
+}

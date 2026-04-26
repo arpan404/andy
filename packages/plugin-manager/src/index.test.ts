@@ -20,12 +20,24 @@ describe("createInstallPlan", () => {
           network: {
             allowedHosts: ["api.example.com"],
           },
+          filesystem: {
+            sensitiveReadRoots: [
+              {
+                path: "~/Library/Application Support/ExampleApp",
+                reason: "Read ExampleApp data after approval.",
+                dataClasses: ["app_data"],
+              },
+            ],
+          },
         },
       },
     );
 
     expect(plan.requiresApproval).toBe(true);
     expect(plan.capabilityChanges).toEqual(["messaging.send"]);
-    expect(plan.permissionChanges).toEqual(["network:api.example.com"]);
+    expect(plan.permissionChanges).toEqual([
+      "filesystem.read_sensitive:~/Library/Application Support/ExampleApp",
+      "network:api.example.com",
+    ]);
   });
 });

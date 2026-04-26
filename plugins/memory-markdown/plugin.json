@@ -1,0 +1,29 @@
+{
+  "id": "andy.memory.markdown",
+  "name": "Markdown Memory",
+  "version": "0.1.0",
+  "entry": "./dist/index.js",
+  "capabilities": [
+    "memory.fetch",
+    "memory.save",
+    "memory.query",
+    "memory.forget",
+    "memory.list",
+    "filesystem.read",
+    "filesystem.write"
+  ],
+  "risk": "high",
+  "memory": {
+    "scopes": ["user", "project", "session", "agent", "plugin"],
+    "namespaces": ["preferences", "facts", "projects", "tasks", "contacts", "self"],
+    "retention": "user_controlled",
+    "semanticSearch": false,
+    "requiresApprovalForScopes": ["user"]
+  },
+  "permissions": {
+    "filesystem": {
+      "readRoots": [".andy/memory"],
+      "writeRoots": [".andy/memory"]
+    }
+  }
+}

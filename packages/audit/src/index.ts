@@ -1,3 +1,5 @@
+import { Effect } from "effect";
+
 export type AuditEvent =
   | {
       type: "plugin.registered";
@@ -23,15 +25,17 @@ export type AuditEvent =
     };
 
 export interface AuditSink {
-  record(event: AuditEvent): void | Promise<void>;
+  record(event: AuditEvent): Effect.Effect<void>;
 }
 
 export class ConsoleAuditSink implements AuditSink {
-  record(event: AuditEvent): void {
-    if (process.env.ANDY_AUDIT !== "1") {
-      return;
-    }
+  record(event: AuditEvent): Effect.Effect<void> {
+    return Effect.sync(() => {
+      if (process.env.ANDY_AUDIT !== "1") {
+        return;
+      }
 
-    console.error(JSON.stringify({ ts: new Date().toISOString(), ...event }));
+      console.error(JSON.stringify({ ts: new Date().toISOString(), ...event }));
+    });
   }
 }

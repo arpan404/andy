@@ -18,7 +18,7 @@ The core runtime owns the minimal trusted path:
 
 Everything with operational power should live behind a plugin boundary.
 
-Core must not grow channel-specific features. WhatsApp, Telegram, voice, vision, computer control, background workers, notifications, filesystem access, shell access, browser control, memory providers, and model providers are plugins.
+Core must not grow channel-specific features. WhatsApp, Telegram, voice, vision, computer control, background workers, swarm orchestration, notifications, filesystem access, shell access, browser control, memory providers, and model providers are plugins.
 
 ## Execution Flow
 
@@ -68,6 +68,7 @@ Manifest-bound execution rules:
 - Runtime rejects undeclared capabilities during plugin registration.
 - Plugin context exposes only approved host APIs.
 - Filesystem access goes through `@andy/vfs` or scoped filesystem plugins.
+- Sensitive filesystem access requires explicit `permissions.filesystem.sensitiveReadRoots` declarations and must be blocked by the runner when undeclared.
 - Network access must be allowlisted.
 - Secrets come only from a secret broker.
 - Plugin upgrades cannot silently gain new capabilities.
@@ -122,6 +123,7 @@ Required first-class plugins:
 - `andy.voice.input`
 - `andy.voice.output`
 - `andy.background-worker`
+- `andy.swarm-orchestrator`
 - `andy.notifications`
 
 These plugins should compose through the agent runtime:
@@ -139,6 +141,56 @@ voice / message / UI input
 Computer control is high risk because it can act on behalf of the user across apps. Mouse, keyboard, window control, app launching, screen capture, and accessibility-tree access must be capability-scoped, policy-checked, and audited.
 
 Background work is also high risk because time separates user intent from execution. Background jobs must persist task state, support cancellation, re-check policy before each tool action, and surface approval requests through notification or messaging plugins.
+
+## Swarm Orchestration
+
+Andy must be able to use multiple agents when a task benefits from decomposition, parallel research, coding/review separation, or long-running background work. This must be plugin-based.
+
+```text
+user task
+  -> agent session
+  -> swarm plugin plans delegation
+  -> policy approves spawn/delegate
+  -> child agents run with bounded capabilities
+  -> swarm plugin joins results
+  -> parent agent responds or continues
+```
+
+Swarm plugins must declare:
+
+- maximum agent count
+- maximum delegation depth
+- allowed roles
+- allowed capabilities
+- approval thresholds
+
+Child agents must not receive ambient access to host tools. They get only the capabilities approved for their subtask, and each child tool call still goes through policy and audit.
+
+## Memory
+
+Andy must support strong long-term memory through plugins. Core defines memory interfaces and policy/audit behavior; memory storage, retrieval, embedding, semantic search, and persistence are plugin capabilities.
+
+Required first-party memory plugins:
+
+- `andy.memory.markdown`
+- `andy.memory.persistent`
+- `andy.memory.semantic`
+
+Memory capabilities:
+
+- `memory.fetch`
+- `memory.save`
+- `memory.query`
+- `memory.semantic_query`
+- `memory.embed`
+- `memory.forget`
+- `memory.list`
+
+Markdown-backed memory is the preferred persistent memory provider. The agent should manage memory in `.md` files so memory is inspectable, editable, diffable, and reviewable by the user. Semantic/vector memory can be added as an index, but Markdown should remain the source of truth unless a user chooses another provider.
+
+Memory records must preserve scope, namespace, key, value, tags, trust level, source, creation time, update time, and optional expiration. User-scope persistent memory is sensitive and should require approval unless narrowly preauthorized.
+
+Untrusted external content must not directly become trusted long-term memory. Memory plugins should store provenance and trust level so the agent can distinguish user-approved facts from derived or untrusted observations.
 
 ## Virtual Filesystem
 

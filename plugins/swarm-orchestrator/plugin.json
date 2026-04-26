@@ -1,0 +1,34 @@
+{
+  "id": "andy.swarm-orchestrator",
+  "name": "Swarm Orchestrator",
+  "version": "0.1.0",
+  "entry": "./dist/index.js",
+  "capabilities": [
+    "swarm.plan",
+    "swarm.spawn",
+    "swarm.delegate",
+    "swarm.join",
+    "swarm.cancel"
+  ],
+  "risk": "high",
+  "swarm": {
+    "maxAgents": 8,
+    "maxDepth": 2,
+    "allowedAgentRoles": [
+      "planner",
+      "researcher",
+      "coder",
+      "reviewer",
+      "operator",
+      "summarizer"
+    ],
+    "allowedCapabilities": [
+      "swarm.plan",
+      "swarm.spawn",
+      "swarm.delegate",
+      "swarm.join",
+      "swarm.cancel"
+    ],
+    "requiresApprovalAboveAgents": 3
+  }
+}

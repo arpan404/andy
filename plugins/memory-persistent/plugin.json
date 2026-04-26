@@ -1,0 +1,21 @@
+{
+  "id": "andy.memory.persistent",
+  "name": "Persistent Memory",
+  "version": "0.1.0",
+  "entry": "./dist/index.js",
+  "capabilities": [
+    "memory.fetch",
+    "memory.save",
+    "memory.query",
+    "memory.forget",
+    "memory.list"
+  ],
+  "risk": "high",
+  "memory": {
+    "scopes": ["user", "project", "session", "agent", "plugin"],
+    "namespaces": ["preferences", "facts", "projects", "tasks", "contacts"],
+    "retention": "user_controlled",
+    "semanticSearch": false,
+    "requiresApprovalForScopes": ["user"]
+  }
+}

@@ -11,6 +11,9 @@
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit"
   },
+  "dependencies": {
+    "effect": "^3.21.2"
+  },
   "devDependencies": {
     "typescript": "^5.9.3"
   }
