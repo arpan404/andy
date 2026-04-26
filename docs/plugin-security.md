@@ -141,6 +141,19 @@ Hosted plugins should be started through the core lifecycle manager. The manager
 
 Plugin packages installed from a reviewed plan are materialized disabled by default. Enabling remains a separate lifecycle step so install, review, enable, and runtime execution stay distinct audit points.
 
+## First-Party System Plugins
+
+Implemented first-party system plugins:
+
+- `@andy/plugin-memory-markdown` stores inspectable Markdown memory inside `ANDY_PLUGIN_STORAGE_ROOT`.
+- `@andy/plugin-filesystem` restricts read/list/write/delete to manifest-declared roots passed by the host.
+- `@andy/plugin-shell` runs commands without shell interpolation, requires a declared `cwd` root, bounds output, and is expected to be approval-gated by policy.
+- `@andy/plugin-telegram` uses the official Telegram Bot API for polling, send, webhook setup, and update normalization.
+- `@andy/plugin-whatsapp` uses the official Meta Graph API for outbound messages and webhook payload verification/normalization.
+- `@andy/plugin-voice-input`, `@andy/plugin-voice-output`, `@andy/plugin-vision`, and `@andy/plugin-computer-control` expose strict capability surfaces while native capture/provider depth is added incrementally.
+
+These plugins run through subprocess hosting, register only manifest-declared proxy tools, and have lifecycle tests for the security-sensitive paths. Capability behavior stays out of core.
+
 ## Upgrade Rule
 
 Plugin upgrades must not silently add capabilities. If the new manifest asks for more capabilities, network hosts, filesystem roots, or secret scopes, the user must approve the change before the plugin is enabled.

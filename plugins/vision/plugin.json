@@ -3,6 +3,42 @@
   "name": "Vision",
   "version": "0.1.0",
   "entry": "./dist/index.js",
+  "executionMode": "subprocess",
   "capabilities": ["camera.read", "screen.capture", "screen.ocr", "screen.describe"],
-  "risk": "high"
+  "risk": "high",
+  "tools": [
+    {
+      "name": "screen.capture",
+      "description": "Capture a screenshot to an approved output path.",
+      "capabilities": ["screen.capture"],
+      "risk": "high",
+      "sandbox": {
+        "isolation": "sandboxed",
+        "compatibleExecutionModes": ["subprocess"],
+        "reason": "Screen capture can reveal sensitive data and is policy-gated."
+      }
+    },
+    {
+      "name": "screen.describe",
+      "description": "Inspect image bytes and prepare them for a vision model provider.",
+      "capabilities": ["screen.describe"],
+      "risk": "medium",
+      "sandbox": {
+        "isolation": "sandboxed",
+        "compatibleExecutionModes": ["subprocess"],
+        "reason": "Image description receives explicit image input."
+      }
+    },
+    {
+      "name": "screen.ocr",
+      "description": "Expose the OCR capability surface for provider-backed OCR.",
+      "capabilities": ["screen.ocr"],
+      "risk": "medium",
+      "sandbox": {
+        "isolation": "sandboxed",
+        "compatibleExecutionModes": ["subprocess"],
+        "reason": "OCR receives explicit image input."
+      }
+    }
+  ]
 }

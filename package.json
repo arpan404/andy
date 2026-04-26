@@ -11,14 +11,17 @@
   ],
   "scripts": {
     "andy": "bun run --filter @andy/cli dev",
-    "build": "bun run --filter './packages/*' build && bun run --filter './apps/*' build",
+    "build": "bun run --filter './packages/*' build && bun run --filter './plugins/*' build && bun run --filter './apps/*' build",
+    "build:binary": "bun run --filter @andy/cli build:binary",
+    "build:daemon-binary": "bun run --filter @andy/daemon build:binary",
     "check": "bun run lint && bun run fmt:check && bun run typecheck && bun run test",
+    "daemon": "bun run --filter @andy/daemon dev",
     "dev": "bun run --filter @andy/cli dev",
     "fmt": "prettier --write .",
     "fmt:check": "prettier --check .",
     "lint": "biome lint .",
     "test": "bun test packages",
-    "typecheck": "bun run --filter './packages/*' check && bun run --filter './apps/*' check"
+    "typecheck": "bun run --filter './packages/*' check && bun run --filter './plugins/*' check && bun run --filter './apps/*' check"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.13",
@@ -33,6 +36,7 @@
     "node": ">=22"
   },
   "dependencies": {
+    "@ai-sdk/openai": "^3.0.53",
     "ai": "^6.0.168",
     "ajv": "^8.20.0",
     "effect": "^3.21.2"

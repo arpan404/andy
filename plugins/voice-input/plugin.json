@@ -3,6 +3,31 @@
   "name": "Voice Input",
   "version": "0.1.0",
   "entry": "./dist/index.js",
+  "executionMode": "subprocess",
   "capabilities": ["voice.listen", "voice.transcribe", "microphone.read"],
-  "risk": "high"
+  "risk": "high",
+  "tools": [
+    {
+      "name": "voice.listen",
+      "description": "Arm explicit voice activation state without ambient microphone access.",
+      "capabilities": ["voice.listen", "microphone.read"],
+      "risk": "high",
+      "sandbox": {
+        "isolation": "sandboxed",
+        "compatibleExecutionModes": ["subprocess"],
+        "reason": "Voice input is explicit activation only and policy-gated."
+      }
+    },
+    {
+      "name": "voice.transcribe",
+      "description": "Normalize supplied transcript text or hand off approved audio files for STT provider integration.",
+      "capabilities": ["voice.transcribe"],
+      "risk": "medium",
+      "sandbox": {
+        "isolation": "sandboxed",
+        "compatibleExecutionModes": ["subprocess"],
+        "reason": "Transcription does not use ambient microphone access."
+      }
+    }
+  ]
 }

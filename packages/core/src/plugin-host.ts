@@ -693,6 +693,14 @@ function createSandboxEnvironment(options: {
     PATH: environment.PATH ?? "",
     HOME: options.sandbox.root,
     TMPDIR: options.sandbox.scratchRoot,
+    ANDY_PLUGIN_FILESYSTEM_READ_ROOTS:
+      options.manifest.permissions?.filesystem?.readRoots?.join(",") ?? "",
+    ANDY_PLUGIN_FILESYSTEM_WRITE_ROOTS:
+      options.manifest.permissions?.filesystem?.writeRoots?.join(",") ?? "",
+    ANDY_PLUGIN_FILESYSTEM_SENSITIVE_READ_ROOTS:
+      options.manifest.permissions?.filesystem?.sensitiveReadRoots
+        ?.map((root) => root.path)
+        .join(",") ?? "",
     ANDY_PLUGIN_NETWORK_HOSTS:
       options.manifest.permissions?.network?.allowedHosts.join(",") ?? "",
     ANDY_PLUGIN_ID: options.manifest.id,

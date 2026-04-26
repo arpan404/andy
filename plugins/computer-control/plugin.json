@@ -3,6 +3,7 @@
   "name": "Computer Control",
   "version": "0.1.0",
   "entry": "./dist/index.js",
+  "executionMode": "subprocess",
   "capabilities": [
     "computer.mouse",
     "computer.keyboard",
@@ -11,5 +12,55 @@
     "computer.accessibility_tree",
     "screen.capture"
   ],
-  "risk": "critical"
+  "risk": "critical",
+  "tools": [
+    {
+      "name": "computer.click",
+      "description": "Click a screen coordinate after explicit policy approval.",
+      "capabilities": ["computer.mouse"],
+      "risk": "critical",
+      "sandbox": {
+        "isolation": "sandboxed",
+        "compatibleExecutionModes": ["subprocess"],
+        "reason": "Mouse control is high risk and disabled unless explicitly enabled."
+      }
+    },
+    {
+      "name": "computer.type",
+      "description": "Type text into the active application after explicit policy approval.",
+      "capabilities": ["computer.keyboard"],
+      "risk": "critical",
+      "sandbox": {
+        "isolation": "sandboxed",
+        "compatibleExecutionModes": ["subprocess"],
+        "reason": "Keyboard control is high risk and disabled unless explicitly enabled."
+      }
+    },
+    {
+      "name": "computer.key",
+      "description": "Press a keyboard key after explicit policy approval.",
+      "capabilities": ["computer.keyboard"],
+      "risk": "critical",
+      "sandbox": {
+        "isolation": "sandboxed",
+        "compatibleExecutionModes": ["subprocess"],
+        "reason": "Keyboard control is high risk and disabled unless explicitly enabled."
+      }
+    },
+    {
+      "name": "computer.window.list",
+      "description": "List visible applications through macOS accessibility APIs.",
+      "capabilities": [
+        "computer.window",
+        "computer.app",
+        "computer.accessibility_tree"
+      ],
+      "risk": "high",
+      "sandbox": {
+        "isolation": "sandboxed",
+        "compatibleExecutionModes": ["subprocess"],
+        "reason": "Window/app inspection can reveal private context and is policy-gated."
+      }
+    }
+  ]
 }

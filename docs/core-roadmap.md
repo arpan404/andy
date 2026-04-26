@@ -4,6 +4,12 @@ Andy Core should stay small and trusted. It should provide the kernel, policy bo
 
 ## Already Started
 
+- First real first-party plugin path: `@andy/plugin-memory-markdown` runs as a subprocess-hosted plugin and backs memory tools with Markdown storage.
+- CLI binary packaging uses Bun standalone executable compilation through `bun run build:binary`.
+- Daemon app boots config, loads enabled plugin manifests through lifecycle, polls due background jobs, saves state, handles shutdown, and can be compiled with `bun run build:daemon-binary`.
+- AI SDK model provider package (`@andy/model-ai-sdk`) registers Vercel AI SDK models behind the core model-provider registry. Andy does not integrate with provider-native SDKs directly.
+- First-party system plugins now exist for Markdown memory, scoped filesystem access, approval-gated shell execution, Telegram, WhatsApp, voice input/output, vision, and computer-control capability surfaces.
+- Daemon remote control supports Telegram polling mode: inbound Telegram messages are normalized, published through the communication bridge, handled by an agent session using a configured AI SDK model provider, and replied to through the Telegram plugin.
 - Agent session kernel with AI SDK result types.
 - Bounded same-step tool-call execution with ordered tool-result messages.
 - Fully qualified internal tool names with ambiguity-safe local aliases.
@@ -136,9 +142,19 @@ Still needed: policy checks and app-specific backing stores.
 
 ### Model Provider Plugins
 
-Core has an LLM runner interface, but production model providers should be implemented as plugins or provider packages behind that interface.
+Core has an LLM runner interface and the first AI SDK OpenAI provider package. Future providers should stay as plugins or provider packages behind that interface and construct Vercel AI SDK `LanguageModel` instances.
 
-Needed providers should include OpenAI first, with room for Anthropic, Google, local models, and routing services.
+Needed providers still include Anthropic, Google, local models, and routing services.
+
+### First-Party Plugin Depth
+
+The first-party plugin packages are now real subprocess-hosted packages with manifests and lifecycle tests. Remaining depth is provider-specific:
+
+- WhatsApp needs daemon webhook HTTP ingress.
+- Voice input needs a speech-to-text provider plugin and explicit microphone capture adapter.
+- Vision needs OCR and vision-model provider integration.
+- Computer control needs a richer accessibility adapter and cross-platform implementations.
+- Filesystem sensitive reads need a separate `filesystem.read_sensitive` tool and policy path.
 
 ### Capability And Policy Refinement
 

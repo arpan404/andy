@@ -3,6 +3,30 @@
   "name": "Voice Output",
   "version": "0.1.0",
   "entry": "./dist/index.js",
+  "executionMode": "subprocess",
   "capabilities": ["voice.speak", "speaker.speak"],
-  "risk": "medium"
+  "risk": "medium",
+  "tools": [
+    {
+      "name": "voice.speak",
+      "description": "Speak text through the local macOS speech synthesizer.",
+      "capabilities": ["voice.speak", "speaker.speak"],
+      "risk": "medium",
+      "sandbox": {
+        "isolation": "sandboxed",
+        "compatibleExecutionModes": ["subprocess"],
+        "reason": "Speech output is explicit and cancellable through process control."
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": { "type": "string", "minLength": 1 },
+          "voice": { "type": "string" },
+          "rate": { "type": "number" }
+        },
+        "required": ["text"],
+        "additionalProperties": false
+      }
+    }
+  ]
 }

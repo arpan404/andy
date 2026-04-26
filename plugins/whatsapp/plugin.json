@@ -3,6 +3,7 @@
   "name": "WhatsApp Messaging",
   "version": "0.1.0",
   "entry": "./dist/index.js",
+  "executionMode": "subprocess",
   "capabilities": [
     "messaging.receive",
     "messaging.send",
@@ -11,5 +12,60 @@
     "messaging.map_identity"
   ],
   "risk": "high",
-  "channel": "whatsapp"
+  "tools": [
+    {
+      "name": "whatsapp.sendMessage",
+      "description": "Send an outbound WhatsApp message through the official Meta Graph API.",
+      "capabilities": ["messaging.send"],
+      "risk": "high",
+      "sandbox": {
+        "isolation": "sandboxed",
+        "compatibleExecutionModes": ["subprocess", "container"],
+        "reason": "Outbound external communication is policy-gated."
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "to": { "type": "string", "minLength": 1 },
+          "text": { "type": "string", "minLength": 1 }
+        },
+        "required": ["to", "text"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "whatsapp.normalizeWebhook",
+      "description": "Normalize WhatsApp Cloud API webhook payloads into Andy messaging shape.",
+      "capabilities": ["messaging.receive", "messaging.map_identity"],
+      "risk": "medium",
+      "sandbox": {
+        "isolation": "sandboxed",
+        "compatibleExecutionModes": ["subprocess", "container"],
+        "reason": "Normalization does not require additional host privileges."
+      }
+    },
+    {
+      "name": "whatsapp.verifyWebhook",
+      "description": "Verify WhatsApp webhook subscription challenge tokens.",
+      "capabilities": ["messaging.manage_webhook"],
+      "risk": "high",
+      "sandbox": {
+        "isolation": "sandboxed",
+        "compatibleExecutionModes": ["subprocess", "container"],
+        "reason": "Webhook verification protects the remote control surface."
+      }
+    }
+  ],
+  "permissions": {
+    "network": {
+      "allowedHosts": ["graph.facebook.com"]
+    },
+    "secrets": {
+      "scopes": [
+        "whatsapp.access_token",
+        "whatsapp.phone_number_id",
+        "whatsapp.verify_token"
+      ]
+    }
+  }
 }

@@ -1,23 +1,21 @@
 {
-  "name": "@andy/cli",
+  "name": "@andy/daemon",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "bin": {
-    "andy": "./dist/index.js"
-  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "build:binary": "bun build --compile --target=bun --outfile=../../dist/andy ./src/index.ts",
+    "build:binary": "bun build --compile --target=bun --outfile=../../dist/andy-daemon ./src/index.ts",
     "check": "tsc -p tsconfig.json --noEmit",
     "dev": "tsx src/index.ts"
   },
   "dependencies": {
     "@andy/audit": "workspace:*",
     "@andy/core": "workspace:*",
+    "@andy/model-ai-sdk": "workspace:*",
     "@andy/plugin-sdk": "workspace:*",
     "@andy/policy": "workspace:*",
-    "@andy/types": "workspace:*"
+    "effect": "^3.21.2"
   },
   "devDependencies": {
     "@types/node": "^25.0.0",

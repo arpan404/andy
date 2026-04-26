@@ -3,6 +3,41 @@
   "name": "Shell",
   "version": "0.1.0",
   "entry": "./dist/index.js",
+  "executionMode": "subprocess",
   "capabilities": ["shell.execute"],
-  "risk": "high"
+  "risk": "critical",
+  "tools": [
+    {
+      "name": "shell.execute",
+      "description": "Execute a command without shell interpolation inside a declared working directory.",
+      "capabilities": ["shell.execute"],
+      "risk": "critical",
+      "sandbox": {
+        "isolation": "sandboxed",
+        "compatibleExecutionModes": ["subprocess", "container"],
+        "reason": "Shell execution is high risk and must be policy-gated with scoped cwd roots."
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "command": { "type": "string", "minLength": 1 },
+          "args": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "cwd": { "type": "string", "minLength": 1 },
+          "timeoutMs": { "type": "number", "minimum": 1 },
+          "maxOutputBytes": { "type": "number", "minimum": 1 }
+        },
+        "required": ["command"],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "permissions": {
+    "filesystem": {
+      "readRoots": ["."],
+      "writeRoots": [".andy/workspace"]
+    }
+  }
 }

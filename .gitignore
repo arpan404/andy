@@ -3,5 +3,6 @@ dist/
 build/
 node_modules/
 .references/
+.andy/
 .env
 .env.*

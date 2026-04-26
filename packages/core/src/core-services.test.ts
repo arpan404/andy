@@ -1,10 +1,10 @@
 import { ConsoleAuditSink } from "@andy/audit";
-import { definePlugin, defineTool } from "@andy/plugin-sdk";
+import { definePlugin, defineTool, parsePluginManifest } from "@andy/plugin-sdk";
 import { CapabilityPolicy } from "@andy/policy";
 import { Effect } from "effect";
 import { describe, expect, test } from "bun:test";
-import { mkdtemp } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { buildAiSdkTools } from "./ai-tools.js";
 import { ApprovalResumeEngine, createApprovalToolResult } from "./approval-resume.js";
@@ -796,6 +796,252 @@ describe("core kernel services", () => {
       saved: { ok: true },
     });
     expect(result.output).toHaveProperty("sandboxRoot", handle.sandboxRoot);
+  });
+
+  test("loads first-party memory-markdown plugin through lifecycle", async () => {
+    const audit = new ConsoleAuditSink();
+    const manifestText = await readFile(
+      resolve("plugins/memory-markdown/plugin.json"),
+      "utf8",
+    );
+    const manifest = {
+      ...parsePluginManifest(JSON.parse(manifestText)),
+      entry: resolve("plugins/memory-markdown/src/index.ts"),
+    };
+    const runtime = new AgentRuntime({
+      audit,
+      policy: new CapabilityPolicy({
+        allowedCapabilities: new Set([
+          "memory.save",
+          "memory.query",
+          "memory.fetch",
+          "memory.forget",
+          "memory.list",
+          "memory.save_fact",
+          "filesystem.read",
+          "filesystem.write",
+        ]),
+      }),
+    });
+    const lifecycle = new PluginLifecycleManager({
+      audit,
+      runtime,
+      host: new SubprocessManifestPluginHost({ audit }),
+    });
+    await Effect.runPromise(lifecycle.start(manifest));
+
+    const saved = await Effect.runPromise(
+      runtime.executeTool("andy.memory.markdown.memory.save", {
+        scope: "user",
+        namespace: "preferences",
+        key: "editor",
+        value: "vim",
+        tags: ["dev"],
+      }),
+    );
+    const queried = await Effect.runPromise(
+      runtime.executeTool("andy.memory.markdown.memory.query", {
+        namespace: "preferences",
+        key: "editor",
+      }),
+    );
+    await Effect.runPromise(lifecycle.stop("andy.memory.markdown"));
+
+    expect(saved.output).toMatchObject({
+      scope: "user",
+      namespace: "preferences",
+      key: "editor",
+      value: "vim",
+    });
+    expect(queried.output).toEqual([saved.output]);
+  });
+
+  test("loads first-party filesystem plugin with scoped roots", async () => {
+    const audit = new ConsoleAuditSink();
+    const dir = await mkdtemp(join(tmpdir(), "andy-filesystem-plugin-"));
+    const readRoot = join(dir, "read");
+    const writeRoot = join(dir, "write");
+    await mkdir(readRoot, { recursive: true });
+    await mkdir(writeRoot, { recursive: true });
+    await writeFile(join(readRoot, "note.txt"), "hello", "utf8");
+    const manifestText = await readFile(
+      resolve("plugins/filesystem/plugin.json"),
+      "utf8",
+    );
+    const manifest = {
+      ...parsePluginManifest(JSON.parse(manifestText)),
+      entry: resolve("plugins/filesystem/src/index.ts"),
+      permissions: {
+        filesystem: {
+          readRoots: [readRoot],
+          writeRoots: [writeRoot],
+        },
+      },
+    };
+    const runtime = new AgentRuntime({
+      audit,
+      policy: new CapabilityPolicy({
+        allowedCapabilities: new Set([
+          "filesystem.read",
+          "filesystem.write",
+          "filesystem.delete",
+        ]),
+      }),
+    });
+    const lifecycle = new PluginLifecycleManager({
+      audit,
+      runtime,
+      host: new SubprocessManifestPluginHost({ audit }),
+    });
+    await Effect.runPromise(lifecycle.start(manifest));
+
+    const read = await Effect.runPromise(
+      runtime.executeTool("andy.filesystem.filesystem.read", {
+        path: join(readRoot, "note.txt"),
+      }),
+    );
+    const written = await Effect.runPromise(
+      runtime.executeTool("andy.filesystem.filesystem.write", {
+        path: join(writeRoot, "out.txt"),
+        content: "saved",
+      }),
+    );
+    const blocked = await Effect.runPromiseExit(
+      runtime.executeTool("andy.filesystem.filesystem.read", {
+        path: join(dir, "outside.txt"),
+      }),
+    );
+    await Effect.runPromise(lifecycle.stop("andy.filesystem"));
+
+    expect(read.output).toMatchObject({ content: "hello" });
+    expect(written.output).toMatchObject({ path: join(writeRoot, "out.txt") });
+    expect(blocked._tag).toBe("Failure");
+  });
+
+  test("loads shell plugin but parks execution for approval", async () => {
+    const audit = new ConsoleAuditSink();
+    const dir = await mkdtemp(join(tmpdir(), "andy-shell-plugin-"));
+    const manifestText = await readFile(resolve("plugins/shell/plugin.json"), "utf8");
+    const manifest = {
+      ...parsePluginManifest(JSON.parse(manifestText)),
+      entry: resolve("plugins/shell/src/index.ts"),
+      permissions: {
+        filesystem: {
+          readRoots: [dir],
+          writeRoots: [dir],
+        },
+      },
+    };
+    const approvals = new ApprovalManager({ audit });
+    const runtime = new AgentRuntime({
+      audit,
+      approvalManager: approvals,
+      policy: new CapabilityPolicy({
+        allowedCapabilities: new Set(["shell.execute"]),
+        approvalRequiredCapabilities: new Set(["shell.execute"]),
+      }),
+    });
+    const lifecycle = new PluginLifecycleManager({
+      audit,
+      runtime,
+      host: new SubprocessManifestPluginHost({ audit }),
+    });
+    await Effect.runPromise(lifecycle.start(manifest));
+
+    const result = await Effect.runPromiseExit(
+      runtime.executeTool("andy.shell.shell.execute", {
+        command: "echo",
+        args: ["hello"],
+        cwd: dir,
+      }),
+    );
+    await Effect.runPromise(lifecycle.stop("andy.shell"));
+
+    expect(result._tag).toBe("Failure");
+    expect(approvals.list()[0]?.toolName).toBe("andy.shell.shell.execute");
+  });
+
+  test("normalizes first-party Telegram and WhatsApp messages", async () => {
+    const audit = new ConsoleAuditSink();
+    const runtime = new AgentRuntime({
+      audit,
+      policy: new CapabilityPolicy({
+        allowedCapabilities: new Set([
+          "messaging.receive",
+          "messaging.map_identity",
+          "messaging.send",
+          "messaging.manage_webhook",
+          "messaging.read_contact",
+        ]),
+      }),
+    });
+    const lifecycle = new PluginLifecycleManager({
+      audit,
+      runtime,
+      host: new SubprocessManifestPluginHost({ audit }),
+    });
+    const telegramManifest = {
+      ...parsePluginManifest(
+        JSON.parse(await readFile(resolve("plugins/telegram/plugin.json"), "utf8")),
+      ),
+      entry: resolve("plugins/telegram/src/index.ts"),
+    };
+    const whatsappManifest = {
+      ...parsePluginManifest(
+        JSON.parse(await readFile(resolve("plugins/whatsapp/plugin.json"), "utf8")),
+      ),
+      entry: resolve("plugins/whatsapp/src/index.ts"),
+    };
+    await Effect.runPromise(lifecycle.start(telegramManifest));
+    await Effect.runPromise(lifecycle.start(whatsappManifest));
+
+    const telegram = await Effect.runPromise(
+      runtime.executeTool("andy.messaging.telegram.telegram.normalizeUpdate", {
+        update_id: 1,
+        message: {
+          message_id: 2,
+          chat: { id: 42 },
+          from: { id: 7 },
+          text: "hi",
+        },
+      }),
+    );
+    const whatsapp = await Effect.runPromise(
+      runtime.executeTool("andy.messaging.whatsapp.whatsapp.normalizeWebhook", {
+        payload: {
+          entry: [
+            {
+              changes: [
+                {
+                  value: {
+                    messages: [
+                      { id: "wamid", from: "15551234567", text: { body: "hello" } },
+                    ],
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+    await Effect.runPromise(lifecycle.stopAll());
+
+    expect(telegram.output).toMatchObject({
+      provider: "telegram",
+      conversationId: "42",
+      senderId: "7",
+      text: "hi",
+    });
+    expect(whatsapp.output).toMatchObject({
+      messages: [
+        {
+          provider: "whatsapp",
+          conversationId: "15551234567",
+          text: "hello",
+        },
+      ],
+    });
   });
 
   test("rejects tools that declare they cannot run in a sandboxed host", async () => {

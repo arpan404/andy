@@ -5,6 +5,7 @@
     "": {
       "name": "andy",
       "dependencies": {
+        "@ai-sdk/openai": "^3.0.53",
         "ai": "^6.0.168",
         "ajv": "^8.20.0",
         "effect": "^3.21.2",
@@ -30,6 +31,23 @@
         "@andy/plugin-sdk": "workspace:*",
         "@andy/policy": "workspace:*",
         "@andy/types": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/node": "^25.0.0",
+        "tsx": "^4.21.0",
+        "typescript": "^5.9.3",
+      },
+    },
+    "apps/daemon": {
+      "name": "@andy/daemon",
+      "version": "0.1.0",
+      "dependencies": {
+        "@andy/audit": "workspace:*",
+        "@andy/core": "workspace:*",
+        "@andy/model-ai-sdk": "workspace:*",
+        "@andy/plugin-sdk": "workspace:*",
+        "@andy/policy": "workspace:*",
+        "effect": "^3.21.2",
       },
       "devDependencies": {
         "@types/node": "^25.0.0",
@@ -75,6 +93,18 @@
         "typescript": "^5.9.3",
       },
     },
+    "packages/model-ai-sdk": {
+      "name": "@andy/model-ai-sdk",
+      "version": "0.1.0",
+      "dependencies": {
+        "@ai-sdk/openai": "^3.0.53",
+        "@andy/core": "workspace:*",
+        "effect": "^3.21.2",
+      },
+      "devDependencies": {
+        "typescript": "^5.9.3",
+      },
+    },
     "packages/plugin-manager": {
       "name": "@andy/plugin-manager",
       "version": "0.1.0",
@@ -92,6 +122,17 @@
       "dependencies": {
         "@andy/types": "workspace:*",
         "@andy/vfs": "workspace:*",
+        "effect": "^3.21.2",
+      },
+      "devDependencies": {
+        "typescript": "^5.9.3",
+      },
+    },
+    "packages/plugin-worker": {
+      "name": "@andy/plugin-worker",
+      "version": "0.1.0",
+      "dependencies": {
+        "@andy/types": "workspace:*",
         "effect": "^3.21.2",
       },
       "devDependencies": {
@@ -135,9 +176,127 @@
         "typescript": "^5.9.3",
       },
     },
+    "plugins/computer-control": {
+      "name": "@andy/plugin-computer-control",
+      "version": "0.1.0",
+      "dependencies": {
+        "@andy/plugin-worker": "workspace:*",
+        "@andy/types": "workspace:*",
+        "effect": "^3.21.2",
+      },
+      "devDependencies": {
+        "@types/node": "^25.0.0",
+        "typescript": "^5.9.3",
+      },
+    },
+    "plugins/filesystem": {
+      "name": "@andy/plugin-filesystem",
+      "version": "0.1.0",
+      "dependencies": {
+        "@andy/plugin-worker": "workspace:*",
+        "@andy/types": "workspace:*",
+        "effect": "^3.21.2",
+      },
+      "devDependencies": {
+        "@types/node": "^25.0.0",
+        "typescript": "^5.9.3",
+      },
+    },
+    "plugins/memory-markdown": {
+      "name": "@andy/plugin-memory-markdown",
+      "version": "0.1.0",
+      "dependencies": {
+        "@andy/memory": "workspace:*",
+        "@andy/types": "workspace:*",
+        "effect": "^3.21.2",
+      },
+      "devDependencies": {
+        "typescript": "^5.9.3",
+      },
+    },
+    "plugins/shell": {
+      "name": "@andy/plugin-shell",
+      "version": "0.1.0",
+      "dependencies": {
+        "@andy/plugin-worker": "workspace:*",
+        "@andy/types": "workspace:*",
+        "effect": "^3.21.2",
+      },
+      "devDependencies": {
+        "@types/node": "^25.0.0",
+        "typescript": "^5.9.3",
+      },
+    },
+    "plugins/telegram": {
+      "name": "@andy/plugin-telegram",
+      "version": "0.1.0",
+      "dependencies": {
+        "@andy/plugin-worker": "workspace:*",
+        "@andy/types": "workspace:*",
+        "effect": "^3.21.2",
+      },
+      "devDependencies": {
+        "@types/node": "^25.0.0",
+        "typescript": "^5.9.3",
+      },
+    },
+    "plugins/vision": {
+      "name": "@andy/plugin-vision",
+      "version": "0.1.0",
+      "dependencies": {
+        "@andy/plugin-worker": "workspace:*",
+        "@andy/types": "workspace:*",
+        "effect": "^3.21.2",
+      },
+      "devDependencies": {
+        "@types/node": "^25.0.0",
+        "typescript": "^5.9.3",
+      },
+    },
+    "plugins/voice-input": {
+      "name": "@andy/plugin-voice-input",
+      "version": "0.1.0",
+      "dependencies": {
+        "@andy/plugin-worker": "workspace:*",
+        "@andy/types": "workspace:*",
+        "effect": "^3.21.2",
+      },
+      "devDependencies": {
+        "@types/node": "^25.0.0",
+        "typescript": "^5.9.3",
+      },
+    },
+    "plugins/voice-output": {
+      "name": "@andy/plugin-voice-output",
+      "version": "0.1.0",
+      "dependencies": {
+        "@andy/plugin-worker": "workspace:*",
+        "@andy/types": "workspace:*",
+        "effect": "^3.21.2",
+      },
+      "devDependencies": {
+        "@types/node": "^25.0.0",
+        "typescript": "^5.9.3",
+      },
+    },
+    "plugins/whatsapp": {
+      "name": "@andy/plugin-whatsapp",
+      "version": "0.1.0",
+      "dependencies": {
+        "@andy/plugin-worker": "workspace:*",
+        "@andy/types": "workspace:*",
+        "effect": "^3.21.2",
+      },
+      "devDependencies": {
+        "@types/node": "^25.0.0",
+        "typescript": "^5.9.3",
+      },
+    },
   },
   "packages": {
     "@ai-sdk/gateway": ["@ai-sdk/gateway@3.0.104", "", { "dependencies": { "@ai-sdk/provider": "3.0.8", "@ai-sdk/provider-utils": "4.0.23", "@vercel/oidc": "3.2.0" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-ZKX5n74io8VIRlhIMSLWVlvT3sXC8Z7cZ9GHuWBWZDVi96+62AIsWuLGvMfcBA1STYuSoDrp6rIziZmvrTq0TA=="],
+
+    "@ai-sdk/openai": ["@ai-sdk/openai@3.0.53", "", { "dependencies": { "@ai-sdk/provider": "3.0.8", "@ai-sdk/provider-utils": "4.0.23" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-Wld+Rbc05KaUn08uBt06eEuwcgalcIFtIl32Yp+GxuZXUQwOb6YeAuq+C6da4ch6BurFoqEaLemJVwjBb7x+PQ=="],
 
     "@ai-sdk/provider": ["@ai-sdk/provider@3.0.8", "", { "dependencies": { "json-schema": "^0.4.0" } }, "sha512-oGMAgGoQdBXbZqNG0Ze56CHjDZ1IDYOwGYxYjO5KLSlz5HiNQ9udIXsPZ61VWaHGZ5XW/jyjmr6t2xz2jGVwbQ=="],
 
@@ -149,11 +308,35 @@
 
     "@andy/core": ["@andy/core@workspace:packages/core"],
 
+    "@andy/daemon": ["@andy/daemon@workspace:apps/daemon"],
+
     "@andy/memory": ["@andy/memory@workspace:packages/memory"],
+
+    "@andy/model-ai-sdk": ["@andy/model-ai-sdk@workspace:packages/model-ai-sdk"],
+
+    "@andy/plugin-computer-control": ["@andy/plugin-computer-control@workspace:plugins/computer-control"],
+
+    "@andy/plugin-filesystem": ["@andy/plugin-filesystem@workspace:plugins/filesystem"],
 
     "@andy/plugin-manager": ["@andy/plugin-manager@workspace:packages/plugin-manager"],
 
+    "@andy/plugin-memory-markdown": ["@andy/plugin-memory-markdown@workspace:plugins/memory-markdown"],
+
     "@andy/plugin-sdk": ["@andy/plugin-sdk@workspace:packages/plugin-sdk"],
+
+    "@andy/plugin-shell": ["@andy/plugin-shell@workspace:plugins/shell"],
+
+    "@andy/plugin-telegram": ["@andy/plugin-telegram@workspace:plugins/telegram"],
+
+    "@andy/plugin-vision": ["@andy/plugin-vision@workspace:plugins/vision"],
+
+    "@andy/plugin-voice-input": ["@andy/plugin-voice-input@workspace:plugins/voice-input"],
+
+    "@andy/plugin-voice-output": ["@andy/plugin-voice-output@workspace:plugins/voice-output"],
+
+    "@andy/plugin-whatsapp": ["@andy/plugin-whatsapp@workspace:plugins/whatsapp"],
+
+    "@andy/plugin-worker": ["@andy/plugin-worker@workspace:packages/plugin-worker"],
 
     "@andy/policy": ["@andy/policy@workspace:packages/policy"],
 
