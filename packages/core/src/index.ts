@@ -5,6 +5,7 @@ import {
   type ToolDefinition,
 } from "@andy/plugin-sdk";
 import type { PolicyEngine } from "@andy/policy";
+import { qualifyToolName } from "@andy/tool-catalog";
 import { createScratchFileSystem, type AgentFileSystem } from "@andy/vfs";
 import { Effect, Schema } from "effect";
 
@@ -21,6 +22,7 @@ export interface ToolExecutionResult<TOutput = unknown> {
 
 interface RegisteredTool {
   pluginId: string;
+  qualifiedName: string;
   definition: ToolDefinition;
 }
 
@@ -38,6 +40,15 @@ export class ToolAlreadyRegisteredError extends Schema.TaggedError<ToolAlreadyRe
   {
     pluginId: Schema.String,
     toolName: Schema.String,
+    message: Schema.String,
+  },
+) {}
+
+export class ToolNameAmbiguousError extends Schema.TaggedError<ToolNameAmbiguousError>()(
+  "ToolNameAmbiguousError",
+  {
+    toolName: Schema.String,
+    matches: Schema.Array(Schema.String),
     message: Schema.String,
   },
 ) {}
@@ -62,6 +73,7 @@ export class ToolPolicyDeniedError extends Schema.TaggedError<ToolPolicyDeniedEr
 export type AgentRuntimeError =
   | PluginRegistrationError
   | ToolAlreadyRegisteredError
+  | ToolNameAmbiguousError
   | ToolNotRegisteredError
   | ToolPolicyDeniedError
   | unknown;
@@ -71,6 +83,7 @@ export class AgentRuntime {
   readonly #policy: PolicyEngine;
   readonly #scratchFs: AgentFileSystem;
   readonly #tools = new Map<string, RegisteredTool>();
+  readonly #aliases = new Map<string, Set<string>>();
 
   constructor(options: AgentRuntimeOptions) {
     this.#audit = options.audit;
@@ -94,20 +107,23 @@ export class AgentRuntime {
       });
 
       for (const tool of plugin.tools) {
-        if (self.#tools.has(tool.name)) {
+        const qualifiedName = qualifyToolName(plugin.id, tool.name);
+        if (self.#tools.has(qualifiedName)) {
           return yield* Effect.fail(
             new ToolAlreadyRegisteredError({
               pluginId: plugin.id,
-              toolName: tool.name,
-              message: `Tool '${tool.name}' is already registered.`,
+              toolName: qualifiedName,
+              message: `Tool '${qualifiedName}' is already registered.`,
             }),
           );
         }
 
-        self.#tools.set(tool.name, {
+        self.#tools.set(qualifiedName, {
           pluginId: plugin.id,
+          qualifiedName,
           definition: tool,
         });
+        self.#addAlias(tool.name, qualifiedName);
       }
 
       yield* self.#audit.record({
@@ -124,7 +140,8 @@ export class AgentRuntime {
   ): Effect.Effect<ToolExecutionResult<TOutput>, AgentRuntimeError> {
     const self = this;
     return Effect.fn("AgentRuntime.executeTool")(function* () {
-      const registeredTool = self.#tools.get(toolName);
+      const registeredTool =
+        self.#tools.get(toolName) ?? (yield* self.#resolveAlias(toolName));
       if (!registeredTool) {
         return yield* Effect.fail(
           new ToolNotRegisteredError({
@@ -166,6 +183,43 @@ export class AgentRuntime {
 
       return { runId, output: output as TOutput };
     })();
+  }
+
+  listTools(): ReadonlyArray<{ name: string; pluginId: string; localName: string }> {
+    return [...this.#tools.values()]
+      .map((tool) => ({
+        name: tool.qualifiedName,
+        pluginId: tool.pluginId,
+        localName: tool.definition.name,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  #addAlias(localName: string, qualifiedName: string): void {
+    const existing = this.#aliases.get(localName) ?? new Set<string>();
+    existing.add(qualifiedName);
+    this.#aliases.set(localName, existing);
+  }
+
+  #resolveAlias(
+    toolName: string,
+  ): Effect.Effect<RegisteredTool | undefined, ToolNameAmbiguousError> {
+    const matches = [...(this.#aliases.get(toolName) ?? [])].sort();
+    if (matches.length === 0) {
+      return Effect.succeed(undefined);
+    }
+
+    if (matches.length > 1) {
+      return Effect.fail(
+        new ToolNameAmbiguousError({
+          toolName,
+          matches,
+          message: `Tool '${toolName}' is ambiguous. Use a fully qualified tool name.`,
+        }),
+      );
+    }
+
+    return Effect.succeed(this.#tools.get(matches[0] as string));
   }
 }
 

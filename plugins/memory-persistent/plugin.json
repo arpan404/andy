@@ -6,6 +6,7 @@
   "capabilities": [
     "memory.fetch",
     "memory.save",
+    "memory.save_fact",
     "memory.query",
     "memory.forget",
     "memory.list"

@@ -51,6 +51,7 @@
         "@andy/audit": "workspace:*",
         "@andy/plugin-sdk": "workspace:*",
         "@andy/policy": "workspace:*",
+        "@andy/tool-catalog": "workspace:*",
         "@andy/vfs": "workspace:*",
         "effect": "^3.21.2",
       },
@@ -99,6 +100,13 @@
         "typescript": "^5.9.3",
       },
     },
+    "packages/tool-catalog": {
+      "name": "@andy/tool-catalog",
+      "version": "0.1.0",
+      "devDependencies": {
+        "typescript": "^5.9.3",
+      },
+    },
     "packages/vfs": {
       "name": "@andy/vfs",
       "version": "0.1.0",
@@ -126,6 +134,8 @@
     "@andy/plugin-sdk": ["@andy/plugin-sdk@workspace:packages/plugin-sdk"],
 
     "@andy/policy": ["@andy/policy@workspace:packages/policy"],
+
+    "@andy/tool-catalog": ["@andy/tool-catalog@workspace:packages/tool-catalog"],
 
     "@andy/vfs": ["@andy/vfs@workspace:packages/vfs"],
 

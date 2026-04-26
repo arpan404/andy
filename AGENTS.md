@@ -141,6 +141,7 @@ Every plugin must declare:
 - entrypoint
 - capabilities
 - tools
+- canonical tool names when a standard name exists in `@andy/tool-catalog`
 - risk metadata
 - typed inputs and outputs
 - source provenance when installed from GitHub or marketplace
@@ -167,6 +168,7 @@ Capabilities should be granular, for example:
 - `memory.write`
 - `memory.fetch`
 - `memory.save`
+- `memory.save_fact`
 - `memory.query`
 - `memory.semantic_query`
 - `memory.embed`
@@ -203,6 +205,15 @@ Capabilities should be granular, for example:
 - `messaging.map_identity`
 
 High-risk plugins such as shell, filesystem writes/deletes, browser form submission, desktop typing, secrets, and external communication must be policy-gated.
+
+Tool naming rules:
+
+- Core must register every tool under a fully qualified internal name: `<pluginId>.<toolName>`.
+- Plugins may expose shared local tool names such as `memory.save`, `filesystem.read`, or `telegram.listen`.
+- Local tool names are aliases only when exactly one installed plugin provides that name.
+- If multiple plugins expose the same local tool name, the runner must reject the ambiguous alias and require the fully qualified name.
+- Standard capabilities and tool names belong in `@andy/tool-catalog`; plugins should reuse those constants instead of inventing near-duplicates.
+- Examples: `andy.memory.markdown.memory.save`, `andy.filesystem.filesystem.read`, `andy.messaging.telegram.telegram.listen`.
 
 Messaging plugin rules:
 

@@ -45,6 +45,24 @@ Plugins declare:
 
 The runtime never calls undeclared capabilities directly.
 
+## Tool Identity
+
+Plugins can expose convenient local tool names like `memory.save`, `filesystem.read`, or `telegram.listen`, but core registers every tool under a fully qualified name:
+
+```text
+<pluginId>.<toolName>
+```
+
+Examples:
+
+- `andy.memory.markdown.memory.save`
+- `andy.filesystem.filesystem.read`
+- `andy.messaging.telegram.telegram.listen`
+
+Local names are aliases only when exactly one installed plugin provides that name. If two plugins both expose `memory.save`, the alias is ambiguous and the runner must require a fully qualified name.
+
+Canonical names should live in `@andy/tool-catalog` so first-party and third-party plugins can share stable capabilities and tool names.
+
 ## Plugin Installation And Sandboxing
 
 Users must be able to install plugins from GitHub in the first release. Marketplace support can come later, but the install model should already support source provenance, version pinning, capability review, and future signing.
