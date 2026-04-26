@@ -1,0 +1,99 @@
+# Andy Architecture
+
+Andy is a TypeScript-first, plugin-native AI agent runtime.
+
+Every product feature must be delivered as a plugin or as an app surface calling stable core APIs. Core exists to run, secure, observe, and coordinate plugins.
+
+## Kernel
+
+The core runtime owns the minimal trusted path:
+
+- agent sessions
+- plugin registration
+- capability registry
+- policy decisions
+- tool execution wrapping
+- audit events
+- memory and model interfaces
+
+Everything with operational power should live behind a plugin boundary.
+
+Core must not grow channel-specific features. WhatsApp, Telegram, voice, vision, filesystem access, shell access, browser control, memory providers, and model providers are plugins.
+
+## Execution Flow
+
+```text
+user goal
+  -> planner
+  -> tool request
+  -> capability policy
+  -> approval or denial
+  -> plugin execution
+  -> audit event
+  -> memory update
+```
+
+## Plugin Contract
+
+Plugins declare:
+
+- identity: `id`, `name`, `version`
+- capabilities
+- tools
+- risk level per tool
+- typed input and output schemas in later iterations
+
+The runtime never calls undeclared capabilities directly.
+
+## Messaging
+
+Andy must be reachable from anywhere through messaging apps. The first release requires WhatsApp and Telegram as first-party plugins.
+
+Messaging is a remote-control surface, so channel integrations are high-risk plugins. They must verify inbound webhooks or polling tokens, normalize incoming messages into a shared messaging interface, map platform identities to Andy identities, and policy-check all outbound replies.
+
+```text
+WhatsApp / Telegram
+  -> channel plugin
+  -> messaging gateway normalization
+  -> sender and channel policy
+  -> agent session
+  -> tool/plugin execution
+  -> outbound policy
+  -> channel plugin response
+  -> audit trail
+```
+
+The shared messaging layer should define common concepts such as channel, conversation, participant, message, attachment, delivery status, and reply target. Platform-specific metadata must be preserved for debugging and audit.
+
+First-party messaging plugins:
+
+- `andy.messaging.whatsapp`
+- `andy.messaging.telegram`
+
+Use official platform APIs for first-party plugins. Do not use unofficial WhatsApp automation or browser-session scraping for first release.
+
+## Virtual Filesystem
+
+Andy uses `@andy/vfs` as its filesystem boundary. Agent scratch space should default to an in-memory virtual filesystem so planning artifacts, temporary files, intermediate tool outputs, and generated patches can be fast and isolated from the user's real disk.
+
+The initial implementation uses `memfs` for the in-memory backend because it implements a Node-style filesystem API, is maintained, and is TypeScript-oriented. Real disk access remains available through a scoped `RealFileSystem` adapter and must be policy-gated before plugins can use it.
+
+Filesystem rules:
+
+- Use virtual scratch files for temporary agent work.
+- Use real filesystem access only through scoped roots.
+- Never expose raw host paths to plugins unless the policy layer has allowed that root.
+- Treat virtual-to-real commits as high-impact operations when they overwrite, delete, or move user files.
+
+## First-Party Plugin Targets
+
+- filesystem
+- shell
+- memory-sqlite
+- browser
+- desktop-control
+- voice
+- vision
+- external services
+
+High-risk plugins must pass through policy gates and approval flows before execution.

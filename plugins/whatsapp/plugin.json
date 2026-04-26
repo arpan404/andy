@@ -1,0 +1,15 @@
+{
+  "id": "andy.messaging.whatsapp",
+  "name": "WhatsApp Messaging",
+  "version": "0.1.0",
+  "entry": "./dist/index.js",
+  "capabilities": [
+    "messaging.receive",
+    "messaging.send",
+    "messaging.manage_webhook",
+    "messaging.read_contact",
+    "messaging.map_identity"
+  ],
+  "risk": "high",
+  "channel": "whatsapp"
+}

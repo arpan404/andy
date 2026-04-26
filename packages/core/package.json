@@ -1,0 +1,23 @@
+{
+  "name": "@andy/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@andy/audit": "workspace:*",
+    "@andy/plugin-sdk": "workspace:*",
+    "@andy/policy": "workspace:*",
+    "@andy/vfs": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
