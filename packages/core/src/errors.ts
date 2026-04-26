@@ -114,12 +114,78 @@ export class ApprovalAlreadyResolvedError extends Schema.TaggedError<ApprovalAlr
   },
 ) {}
 
+export class CommunicationChannelNotFoundError extends Schema.TaggedError<CommunicationChannelNotFoundError>()(
+  "CommunicationChannelNotFoundError",
+  {
+    channelId: Schema.String,
+    message: Schema.String,
+  },
+) {}
+
+export class CommunicationSendError extends Schema.TaggedError<CommunicationSendError>()(
+  "CommunicationSendError",
+  {
+    channelId: Schema.String,
+    message: Schema.String,
+    cause: Schema.optional(Schema.String),
+  },
+) {}
+
 export class PluginHostUnsupportedError extends Schema.TaggedError<PluginHostUnsupportedError>()(
   "PluginHostUnsupportedError",
   {
     pluginId: Schema.String,
     executionMode: Schema.String,
     message: Schema.String,
+  },
+) {}
+
+export class PluginSandboxError extends Schema.TaggedError<PluginSandboxError>()(
+  "PluginSandboxError",
+  {
+    pluginId: Schema.String,
+    root: Schema.String,
+    message: Schema.String,
+    cause: Schema.optional(Schema.String),
+  },
+) {}
+
+export class ToolSandboxIncompatibleError extends Schema.TaggedError<ToolSandboxIncompatibleError>()(
+  "ToolSandboxIncompatibleError",
+  {
+    pluginId: Schema.String,
+    toolName: Schema.String,
+    executionMode: Schema.String,
+    message: Schema.String,
+  },
+) {}
+
+export class ToolHostPrivilegeDeniedError extends Schema.TaggedError<ToolHostPrivilegeDeniedError>()(
+  "ToolHostPrivilegeDeniedError",
+  {
+    pluginId: Schema.String,
+    toolName: Schema.String,
+    message: Schema.String,
+  },
+) {}
+
+export class WorkerPluginExecutionError extends Schema.TaggedError<WorkerPluginExecutionError>()(
+  "WorkerPluginExecutionError",
+  {
+    pluginId: Schema.String,
+    toolName: Schema.String,
+    message: Schema.String,
+    cause: Schema.optional(Schema.String),
+  },
+) {}
+
+export class SubprocessPluginExecutionError extends Schema.TaggedError<SubprocessPluginExecutionError>()(
+  "SubprocessPluginExecutionError",
+  {
+    pluginId: Schema.String,
+    toolName: Schema.String,
+    message: Schema.String,
+    cause: Schema.optional(Schema.String),
   },
 ) {}
 
@@ -147,6 +213,15 @@ export class SecretNotFoundError extends Schema.TaggedError<SecretNotFoundError>
     pluginId: Schema.String,
     scope: Schema.String,
     message: Schema.String,
+  },
+) {}
+
+export class CoreStateStoreError extends Schema.TaggedError<CoreStateStoreError>()(
+  "CoreStateStoreError",
+  {
+    path: Schema.String,
+    message: Schema.String,
+    cause: Schema.optional(Schema.String),
   },
 ) {}
 
@@ -178,6 +253,7 @@ export class SwarmRoleDeniedError extends Schema.TaggedError<SwarmRoleDeniedErro
 
 export type AgentRuntimeError =
   | PluginRegistrationError
+  | ToolHostPrivilegeDeniedError
   | ToolAlreadyRegisteredError
   | ToolNameAmbiguousError
   | ToolNotRegisteredError

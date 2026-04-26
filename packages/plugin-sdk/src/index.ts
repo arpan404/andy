@@ -11,6 +11,10 @@ export type ToolInput = JsonValue;
 
 export type ToolOutput = JsonValue;
 
+export type JsonSchemaObject = {
+  readonly [key: string]: JsonValue | JsonSchemaObject | readonly JsonSchemaObject[];
+};
+
 export interface ToolExecutionError {
   readonly _tag: string;
   readonly message: string;
@@ -116,6 +120,9 @@ export interface ToolDefinition<
   description: string;
   capabilities: Capability[];
   risk: RiskLevel;
+  sandbox?: ToolSandboxPolicy;
+  inputSchema?: JsonSchemaObject;
+  outputSchema?: JsonSchemaObject;
   execute(input: TInput, context: ToolContext): Effect.Effect<TOutput, TError>;
 }
 
@@ -148,12 +155,30 @@ export interface PluginManifest {
   version: string;
   entry: string;
   capabilities: Capability[];
+  tools?: PluginManifestTool[];
   risk: RiskLevel;
   executionMode?: PluginExecutionMode;
   source?: PluginSource;
   permissions?: PluginPermissions;
   swarm?: SwarmManifest;
   memory?: MemoryManifest;
+}
+
+export interface PluginManifestTool {
+  name: string;
+  description: string;
+  capabilities: Capability[];
+  risk: RiskLevel;
+  sandbox?: ToolSandboxPolicy;
+  inputSchema?: JsonSchemaObject;
+  outputSchema?: JsonSchemaObject;
+}
+
+export interface ToolSandboxPolicy {
+  isolation?: "sandboxed" | "unsandboxed";
+  compatibleExecutionModes: PluginExecutionMode[];
+  requiresHostPrivileges?: boolean;
+  reason?: string;
 }
 
 export interface PluginPermissions {
@@ -241,6 +266,39 @@ export const PluginManifestSchema = Schema.Struct({
   version: Schema.String,
   entry: Schema.String,
   capabilities: Schema.Array(Schema.String),
+  tools: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        name: Schema.String,
+        description: Schema.String,
+        capabilities: Schema.Array(Schema.String),
+        risk: Schema.Literal("low", "medium", "high", "critical"),
+        sandbox: Schema.optional(
+          Schema.Struct({
+            isolation: Schema.optional(Schema.Literal("sandboxed", "unsandboxed")),
+            compatibleExecutionModes: Schema.Array(
+              Schema.Literal(
+                "metadata",
+                "trusted-in-process",
+                "subprocess",
+                "worker",
+                "container",
+                "remote",
+              ),
+            ),
+            requiresHostPrivileges: Schema.optional(Schema.Boolean),
+            reason: Schema.optional(Schema.String),
+          }),
+        ),
+        inputSchema: Schema.optional(
+          Schema.Record({ key: Schema.String, value: Schema.Unknown }),
+        ),
+        outputSchema: Schema.optional(
+          Schema.Record({ key: Schema.String, value: Schema.Unknown }),
+        ),
+      }),
+    ),
+  ),
   risk: Schema.Literal("low", "medium", "high", "critical"),
   executionMode: Schema.optional(
     Schema.Literal(

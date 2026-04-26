@@ -21,6 +21,12 @@ export type AuditEvent =
       executionMode: string;
     }
   | {
+      type: "plugin.host.tool_requested" | "plugin.host.tool_completed";
+      pluginId: string;
+      toolName: string;
+      requestId: string;
+    }
+  | {
       type: "plugin.host_api.requested";
       pluginId: string;
       runId: string;
@@ -79,6 +85,22 @@ export type AuditEvent =
       type: "approval.resolved";
       approvalId: string;
       decision: "approved" | "denied" | "expired";
+    }
+  | {
+      type: "communication.channel.registered";
+      channelId: string;
+      pluginId: string;
+    }
+  | {
+      type: "communication.message.inbound" | "communication.message.outbound";
+      messageId: string;
+      channelId: string;
+      conversationId: string;
+    }
+  | {
+      type: "communication.approval.requested";
+      approvalId: string;
+      channelId: string;
     }
   | {
       type: "background.job.created" | "background.job.updated";

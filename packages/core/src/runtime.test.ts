@@ -1,6 +1,9 @@
+import { ConsoleAuditSink } from "@andy/audit";
 import { definePlugin, defineTool } from "@andy/plugin-sdk";
+import { CapabilityPolicy } from "@andy/policy";
 import { Effect } from "effect";
 import { describe, expect, test } from "bun:test";
+import { AgentRuntime } from "./runtime.js";
 import { createRuntime, registerMemorySavePlugin } from "./test-helpers.js";
 
 describe("AgentRuntime tool names", () => {
@@ -184,5 +187,89 @@ describe("AgentRuntime tool names", () => {
     const result = await Effect.runPromise(runtime.executeTool("agent.respond", {}));
 
     expect(result.output).toMatchObject({ saved: true });
+  });
+
+  test("rejects unsandboxed tools unless the plugin is explicitly trusted", async () => {
+    const runtime = createRuntime(["desktop.keyboard"]);
+    const result = await Effect.runPromiseExit(
+      runtime.registerPlugin(
+        definePlugin({
+          id: "andy.desktop",
+          name: "Desktop",
+          version: "0.1.0",
+          capabilities: ["desktop.keyboard"],
+          tools: [
+            defineTool({
+              name: "desktop.keyboard",
+              description: "Control the host keyboard.",
+              capabilities: ["desktop.keyboard"],
+              risk: "high",
+              sandbox: {
+                isolation: "unsandboxed",
+                compatibleExecutionModes: ["trusted-in-process"],
+                requiresHostPrivileges: true,
+                reason: "Desktop control needs the host accessibility session.",
+              },
+              execute() {
+                return Effect.succeed({ typed: true });
+              },
+            }),
+          ],
+        }),
+      ),
+    );
+
+    expect(result._tag).toBe("Failure");
+    if (result._tag === "Failure") {
+      expect(String(result.cause)).toContain("ToolHostPrivilegeDeniedError");
+    }
+  });
+
+  test("allows unsandboxed tools only for local trusted plugins", async () => {
+    const runtime = new AgentRuntime({
+      audit: new ConsoleAuditSink(),
+      policy: new CapabilityPolicy({
+        allowedCapabilities: new Set(["desktop.keyboard"]),
+      }),
+      hostPrivilegePolicy: {
+        allowedPluginIds: new Set(["andy.desktop"]),
+      },
+    });
+
+    await Effect.runPromise(
+      runtime.registerPlugin(
+        definePlugin({
+          id: "andy.desktop",
+          name: "Desktop",
+          version: "0.1.0",
+          source: {
+            type: "local",
+            reference: "first-party",
+          },
+          capabilities: ["desktop.keyboard"],
+          tools: [
+            defineTool({
+              name: "desktop.keyboard",
+              description: "Control the host keyboard.",
+              capabilities: ["desktop.keyboard"],
+              risk: "high",
+              sandbox: {
+                isolation: "unsandboxed",
+                compatibleExecutionModes: ["trusted-in-process"],
+                requiresHostPrivileges: true,
+                reason: "Desktop control needs the host accessibility session.",
+              },
+              execute() {
+                return Effect.succeed({ typed: true });
+              },
+            }),
+          ],
+        }),
+      ),
+    );
+
+    const result = await Effect.runPromise(runtime.executeTool("desktop.keyboard", {}));
+
+    expect(result.output).toEqual({ typed: true });
   });
 });

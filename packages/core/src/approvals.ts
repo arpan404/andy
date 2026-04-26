@@ -2,6 +2,7 @@ import type { AuditSink } from "@andy/audit";
 import type { JsonValue } from "@andy/types";
 import { Effect } from "effect";
 import { ApprovalAlreadyResolvedError, ApprovalNotFoundError } from "./errors.js";
+import type { CommunicationBridge } from "./communication.js";
 
 export type ApprovalStatus = "pending" | "approved" | "denied" | "expired";
 
@@ -21,14 +22,20 @@ export interface ApprovalCreateInput {
   toolName: string;
   input: JsonValue;
   reason: string;
+  communication?: {
+    channelId: string;
+    conversationId: string;
+  };
 }
 
 export class ApprovalManager {
   readonly #audit: AuditSink;
+  readonly #communication: CommunicationBridge | undefined;
   readonly #requests = new Map<string, ApprovalRequest>();
 
-  constructor(options: { audit: AuditSink }) {
+  constructor(options: { audit: AuditSink; communication?: CommunicationBridge }) {
     this.#audit = options.audit;
+    this.#communication = options.communication;
   }
 
   create(input: ApprovalCreateInput): Effect.Effect<ApprovalRequest> {
@@ -51,6 +58,20 @@ export class ApprovalManager {
         toolName: request.toolName,
         reason: request.reason,
       });
+      if (self.#communication && input.communication) {
+        yield* self.#communication
+          .requestApproval({
+            approvalId: request.id,
+            channelId: input.communication.channelId,
+            conversationId: input.communication.conversationId,
+            text: `Approval required for ${request.toolName}: ${request.reason}`,
+            metadata: {
+              runId: request.runId,
+              toolName: request.toolName,
+            },
+          })
+          .pipe(Effect.catchAll(() => Effect.void));
+      }
       return request;
     })();
   }

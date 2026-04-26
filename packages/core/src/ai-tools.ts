@@ -16,10 +16,12 @@ export function buildAiSdkTools(tools: readonly RuntimeToolRecord[]): ToolSet {
           `Capabilities: ${record.capabilities.join(", ") || "none"}.`,
           `Risk: ${record.risk}.`,
         ].join(" "),
-        inputSchema: jsonSchema({
-          type: "object",
-          additionalProperties: true,
-        }),
+        inputSchema: jsonSchema(
+          record.inputSchema ?? {
+            type: "object",
+            additionalProperties: true,
+          },
+        ),
       }),
     ]),
   );

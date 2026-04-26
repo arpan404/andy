@@ -18,6 +18,7 @@ import {
   PluginDisabledError,
   PluginNotRegisteredError,
   PluginRegistrationError,
+  ToolHostPrivilegeDeniedError,
   ToolApprovalRequiredError,
   ToolAlreadyRegisteredError,
   ToolNameAmbiguousError,
@@ -35,7 +36,13 @@ export interface AgentRuntimeOptions {
   policy: PolicyEngine;
   scratchFs?: AgentFileSystem;
   approvalManager?: ApprovalManager;
+  hostPrivilegePolicy?: HostPrivilegePolicy;
   pluginStorageFactory?: (pluginId: string) => AgentFileSystem;
+}
+
+export interface HostPrivilegePolicy {
+  allowedPluginIds: ReadonlySet<string>;
+  requireLocalSource?: boolean;
 }
 
 interface RegisteredTool {
@@ -64,6 +71,7 @@ export class AgentRuntime {
   readonly #audit: AuditSink;
   readonly #policy: PolicyEngine;
   readonly #approvalManager: ApprovalManager;
+  readonly #hostPrivilegePolicy: HostPrivilegePolicy;
   readonly #scratchFs: AgentFileSystem;
   readonly #pluginStorageFactory: (pluginId: string) => AgentFileSystem;
   readonly #plugins = new Map<string, RegisteredPlugin>();
@@ -75,6 +83,10 @@ export class AgentRuntime {
     this.#policy = options.policy;
     this.#approvalManager =
       options.approvalManager ?? new ApprovalManager({ audit: options.audit });
+    this.#hostPrivilegePolicy = options.hostPrivilegePolicy ?? {
+      allowedPluginIds: new Set(),
+      requireLocalSource: true,
+    };
     this.#scratchFs = options.scratchFs ?? createScratchFileSystem();
     this.#pluginStorageFactory =
       options.pluginStorageFactory ??
@@ -83,7 +95,10 @@ export class AgentRuntime {
 
   registerPlugin(
     plugin: PluginDefinition,
-  ): Effect.Effect<void, PluginRegistrationError | ToolAlreadyRegisteredError> {
+  ): Effect.Effect<
+    void,
+    PluginRegistrationError | ToolAlreadyRegisteredError | ToolHostPrivilegeDeniedError
+  > {
     const self = this;
     return Effect.fn("AgentRuntime.registerPlugin")(function* () {
       yield* Effect.try({
@@ -95,6 +110,8 @@ export class AgentRuntime {
             cause: stringifyCause(cause),
           }),
       });
+
+      yield* self.#validateHostPrivilegedTools(plugin);
 
       const storageFs =
         self.#plugins.get(plugin.id)?.storageFs ??
@@ -130,6 +147,45 @@ export class AgentRuntime {
         pluginId: plugin.id,
         toolCount: plugin.tools.length,
       });
+    })();
+  }
+
+  #validateHostPrivilegedTools(
+    plugin: PluginDefinition,
+  ): Effect.Effect<void, ToolHostPrivilegeDeniedError> {
+    const self = this;
+    return Effect.fn("AgentRuntime.validateHostPrivilegedTools")(function* () {
+      for (const tool of plugin.tools) {
+        const requiresUnsandboxed =
+          tool.sandbox?.isolation === "unsandboxed" ||
+          tool.sandbox?.requiresHostPrivileges === true;
+        if (!requiresUnsandboxed) {
+          continue;
+        }
+
+        if (!self.#hostPrivilegePolicy.allowedPluginIds.has(plugin.id)) {
+          return yield* Effect.fail(
+            new ToolHostPrivilegeDeniedError({
+              pluginId: plugin.id,
+              toolName: tool.name,
+              message: `Plugin '${plugin.id}' tool '${tool.name}' requires unsandboxed host privileges but the runtime did not allow this plugin.`,
+            }),
+          );
+        }
+
+        if (
+          self.#hostPrivilegePolicy.requireLocalSource !== false &&
+          plugin.source?.type !== "local"
+        ) {
+          return yield* Effect.fail(
+            new ToolHostPrivilegeDeniedError({
+              pluginId: plugin.id,
+              toolName: tool.name,
+              message: `Plugin '${plugin.id}' tool '${tool.name}' requires unsandboxed host privileges but is not installed from a local trusted source.`,
+            }),
+          );
+        }
+      }
     })();
   }
 
@@ -231,7 +287,10 @@ export class AgentRuntime {
       const runId = crypto.randomUUID();
       yield* self.#audit.record({ type: "tool.requested", runId, toolName });
 
-      const decision = self.#policy.decide(registeredTool.definition, input);
+      const decision = self.#policy.decide(registeredTool.definition, input, {
+        pluginId: registeredTool.pluginId,
+        risk: registeredTool.definition.risk,
+      });
       const policyEvent: AuditEvent =
         "reason" in decision
           ? {
@@ -311,6 +370,12 @@ export class AgentRuntime {
           description: tool.definition.description,
           capabilities: tool.definition.capabilities,
           risk: tool.definition.risk,
+          ...(tool.definition.inputSchema
+            ? { inputSchema: tool.definition.inputSchema }
+            : {}),
+          ...(tool.definition.outputSchema
+            ? { outputSchema: tool.definition.outputSchema }
+            : {}),
           isLocalNameAmbiguous,
         };
         if (!isLocalNameAmbiguous) {

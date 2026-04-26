@@ -17,12 +17,22 @@ Andy Core should stay small and trusted. It should provide the kernel, policy bo
 - Typed event bus and trace manager.
 - Secret broker interface with an in-memory implementation.
 - Typed host API surface for memory, filesystem, messaging, background, swarm, and secrets.
+- Typed plugin tool input schemas are carried from plugin definitions into AI SDK tool definitions.
 - Markdown-backed memory package.
 - Virtual filesystem package for scratch files and scoped real filesystem access.
 - Bounded multi-agent coordinator primitive.
 - Plugin host and installer interfaces, with trusted in-process and manifest-fetching scaffolds.
+- Worker manifest plugin host can start worker-module plugin entries, proxy manifest-declared tools over a typed RPC protocol, and register those tools with the runtime.
+- Subprocess manifest plugin host can start Bun plugin processes with a per-plugin sandbox root, minimal environment, JSON-line RPC, and runtime-registered proxy tools.
+- Plugin sandbox factory creates isolated scratch and storage filesystem roots for hosted plugin processes.
+- Tool manifests can declare sandbox compatibility and host-privilege requirements, and incompatible tools are rejected before host startup.
+- Runtime registration rejects unsandboxed tools unless the host explicitly trusts the plugin id and, by default, the plugin source is local.
+- Subprocess launch profiles support process-boundary mode, macOS `sandbox-exec`, and container command generation.
+- Communication bridge routes user/agent messages and approval prompts through registered channel plugins such as WhatsApp and Telegram.
+- Worker and subprocess plugin RPC supports host API requests with manifest capability checks before forwarding to the host handler.
 - Background job scheduler with due-job lookup and status transitions.
-- Core state store contract with an in-memory implementation.
+- Core state store contract with in-memory and JSON file implementations.
+- Cancellation token registry and timeout helper.
 
 ## Needed Next
 
@@ -30,7 +40,7 @@ Andy Core should stay small and trusted. It should provide the kernel, policy bo
 
 Core has an initial adapter that turns runtime tool records into AI SDK tool definitions passed to `generateText` and `streamText`.
 
-Still needed: provider-specific compatibility tests, richer schema binding for typed plugin inputs, and a decision on whether AI SDK should only plan tool calls or also auto-execute selected low-risk tools.
+Still needed: provider-specific compatibility tests, output schema validation, and a decision on whether AI SDK should only plan tool calls or also auto-execute selected low-risk tools.
 
 ### Streaming Agent Loop
 
@@ -40,25 +50,26 @@ Streaming should not bypass policy or plugin execution rules.
 
 ### Approval Flow
 
-Core can create approval requests when policy returns `ask`.
+Core can create approval requests when policy returns `ask` and can route approval prompts through the communication bridge.
 
 Still needed:
 
 - pause or park the tool call
-- route approval through notification, UI, or messaging plugins
 - resume, deny, or expire the pending action
 - persist approvals across daemon restarts
 
 ### Plugin Host Isolation
 
-The current runtime models plugin registration and execution boundaries. Core still needs the actual plugin host process boundary for untrusted plugins.
+The current runtime can start worker plugins and subprocess plugins and execute manifest-declared tools through typed RPC protocols. The runtime registers proxy tools from the manifest, so plugin code does not run in the core process.
 
-Initial target:
+Still needed for stronger untrusted execution:
 
-- subprocess or worker execution for installed plugins
+- stricter OS-level subprocess confinement
 - restricted host API transport
 - no ambient `fs`, shell, secrets, desktop, or network access
 - lifecycle-controlled startup and shutdown
+
+Bun workers and subprocesses isolate plugin code from the core process. The subprocess launcher can also build macOS sandbox and container commands, but availability depends on the host OS and installed runtime. High-risk third-party plugins should use a platform sandbox, container, or remote execution profile with explicit filesystem and network restrictions.
 
 ### Manifest Schema And Validation
 
@@ -68,7 +79,7 @@ Still needed: tool input/output schema declarations, schema versioning, compatib
 
 ### Durable State
 
-Core has an in-memory state store contract. The daemon still needs durable stores for:
+Core has in-memory and JSON file state store implementations. The daemon still needs durable stores for:
 
 - installed plugin records
 - plugin lifecycle state
@@ -79,7 +90,7 @@ Core has an in-memory state store contract. The daemon still needs durable store
 - configuration
 - secret references
 
-In-memory implementations are acceptable for tests only.
+In-memory implementations are acceptable for tests only. JSON file storage is acceptable for early local daemon development, but production should move to a transactional store.
 
 ### Background Job Kernel
 
@@ -144,7 +155,7 @@ This is required for debugging, safety review, and user trust.
 
 ### Cancellation And Timeouts
 
-Core needs cancellation and timeout support for model calls, tool executions, background jobs, and swarm child agents.
+Core has a cancellation token registry and timeout helper. These still need to be threaded into model calls, tool executions, background jobs, and swarm child agents.
 
 No plugin or child agent should run indefinitely without an inspectable state and cancellation path.
 

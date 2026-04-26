@@ -6,6 +6,7 @@ import type {
   ToolSet,
 } from "ai";
 import type { JsonValue } from "@andy/types";
+import type { JsonSchemaObject } from "@andy/plugin-sdk";
 import type { Effect } from "effect";
 import type {
   AgentRuntimeError,
@@ -31,6 +32,8 @@ export interface RuntimeToolRecord {
   description: string;
   capabilities: readonly string[];
   risk: string;
+  inputSchema?: JsonSchemaObject;
+  outputSchema?: JsonSchemaObject;
   isLocalNameAmbiguous: boolean;
   localAlias?: string;
 }
