@@ -179,6 +179,19 @@
         "typescript": "^5.9.3",
       },
     },
+    "plugins/background-worker": {
+      "name": "@andy/plugin-background-worker",
+      "version": "0.1.0",
+      "dependencies": {
+        "@andy/plugin-worker": "workspace:*",
+        "@andy/types": "workspace:*",
+        "effect": "^3.21.2",
+      },
+      "devDependencies": {
+        "@types/node": "^25.0.0",
+        "typescript": "^5.9.3",
+      },
+    },
     "plugins/computer-control": {
       "name": "@andy/plugin-computer-control",
       "version": "0.1.0",
@@ -217,8 +230,60 @@
         "typescript": "^5.9.3",
       },
     },
+    "plugins/memory-persistent": {
+      "name": "@andy/plugin-memory-persistent",
+      "version": "0.1.0",
+      "dependencies": {
+        "@andy/plugin-worker": "workspace:*",
+        "@andy/types": "workspace:*",
+        "effect": "^3.21.2",
+      },
+      "devDependencies": {
+        "@types/node": "^25.0.0",
+        "typescript": "^5.9.3",
+      },
+    },
+    "plugins/memory-semantic": {
+      "name": "@andy/plugin-memory-semantic",
+      "version": "0.1.0",
+      "dependencies": {
+        "@andy/plugin-worker": "workspace:*",
+        "@andy/types": "workspace:*",
+        "effect": "^3.21.2",
+      },
+      "devDependencies": {
+        "@types/node": "^25.0.0",
+        "typescript": "^5.9.3",
+      },
+    },
+    "plugins/notifications": {
+      "name": "@andy/plugin-notifications",
+      "version": "0.1.0",
+      "dependencies": {
+        "@andy/plugin-worker": "workspace:*",
+        "@andy/types": "workspace:*",
+        "effect": "^3.21.2",
+      },
+      "devDependencies": {
+        "@types/node": "^25.0.0",
+        "typescript": "^5.9.3",
+      },
+    },
     "plugins/shell": {
       "name": "@andy/plugin-shell",
+      "version": "0.1.0",
+      "dependencies": {
+        "@andy/plugin-worker": "workspace:*",
+        "@andy/types": "workspace:*",
+        "effect": "^3.21.2",
+      },
+      "devDependencies": {
+        "@types/node": "^25.0.0",
+        "typescript": "^5.9.3",
+      },
+    },
+    "plugins/swarm-orchestrator": {
+      "name": "@andy/plugin-swarm-orchestrator",
       "version": "0.1.0",
       "dependencies": {
         "@andy/plugin-worker": "workspace:*",
@@ -317,6 +382,8 @@
 
     "@andy/model-ai-sdk": ["@andy/model-ai-sdk@workspace:packages/model-ai-sdk"],
 
+    "@andy/plugin-background-worker": ["@andy/plugin-background-worker@workspace:plugins/background-worker"],
+
     "@andy/plugin-computer-control": ["@andy/plugin-computer-control@workspace:plugins/computer-control"],
 
     "@andy/plugin-filesystem": ["@andy/plugin-filesystem@workspace:plugins/filesystem"],
@@ -325,9 +392,17 @@
 
     "@andy/plugin-memory-markdown": ["@andy/plugin-memory-markdown@workspace:plugins/memory-markdown"],
 
+    "@andy/plugin-memory-persistent": ["@andy/plugin-memory-persistent@workspace:plugins/memory-persistent"],
+
+    "@andy/plugin-memory-semantic": ["@andy/plugin-memory-semantic@workspace:plugins/memory-semantic"],
+
+    "@andy/plugin-notifications": ["@andy/plugin-notifications@workspace:plugins/notifications"],
+
     "@andy/plugin-sdk": ["@andy/plugin-sdk@workspace:packages/plugin-sdk"],
 
     "@andy/plugin-shell": ["@andy/plugin-shell@workspace:plugins/shell"],
+
+    "@andy/plugin-swarm-orchestrator": ["@andy/plugin-swarm-orchestrator@workspace:plugins/swarm-orchestrator"],
 
     "@andy/plugin-telegram": ["@andy/plugin-telegram@workspace:plugins/telegram"],
 

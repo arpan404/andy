@@ -269,6 +269,13 @@ function loadManifest(path: string): Effect.Effect<PluginManifest, unknown> {
       entry: isAbsolute(parsed.entry)
         ? parsed.entry
         : resolve(dirname(manifestPath), parsed.entry),
+      ...(parsed.binaryEntrypoint
+        ? {
+            binaryEntrypoint: isAbsolute(parsed.binaryEntrypoint)
+              ? parsed.binaryEntrypoint
+              : resolve(dirname(manifestPath), parsed.binaryEntrypoint),
+          }
+        : {}),
     };
   })();
 }
@@ -291,8 +298,35 @@ function seedPluginRegistryFromConfig(
           createInstallPlan(source, {
             ...manifest,
             entry: relativizeEntry(manifest.entry, sourceRoot),
+            ...(manifest.binaryEntrypoint
+              ? {
+                  binaryEntrypoint: relativizeEntry(
+                    manifest.binaryEntrypoint,
+                    sourceRoot,
+                  ),
+                }
+              : {}),
           }),
         );
+      } else {
+        const nextManifest = {
+          ...manifest,
+          entry: relativizeEntry(manifest.entry, sourceRoot),
+          ...(manifest.binaryEntrypoint
+            ? {
+                binaryEntrypoint: relativizeEntry(
+                  manifest.binaryEntrypoint,
+                  sourceRoot,
+                ),
+              }
+            : {}),
+        };
+        if (JSON.stringify(existing.right.manifest) !== JSON.stringify(nextManifest)) {
+          yield* registry.upgrade(
+            createInstallPlan(source, nextManifest, existing.right),
+            "approved",
+          );
+        }
       }
       if (plugin.enabled) {
         yield* registry.enable(manifest.id);
@@ -315,6 +349,13 @@ function materializeInstalledManifest(record: InstalledPluginRecord): PluginMani
     entry: isAbsolute(record.manifest.entry)
       ? record.manifest.entry
       : resolve(sourceRoot, record.manifest.entry),
+    ...(record.manifest.binaryEntrypoint
+      ? {
+          binaryEntrypoint: isAbsolute(record.manifest.binaryEntrypoint)
+            ? record.manifest.binaryEntrypoint
+            : resolve(sourceRoot, record.manifest.binaryEntrypoint),
+        }
+      : {}),
   };
 }
 
@@ -406,6 +447,18 @@ function createDefaultConfig(): DaemonConfig {
       "computer.window",
       "computer.app",
       "computer.accessibility_tree",
+      "background.run",
+      "background.schedule",
+      "background.cancel",
+      "notification.send",
+      "notification.approval_request",
+      "swarm.plan",
+      "swarm.spawn",
+      "swarm.delegate",
+      "swarm.join",
+      "swarm.cancel",
+      "memory.embed",
+      "memory.semantic_query",
     ],
     approvalRequiredCapabilities: [
       "filesystem.write",
@@ -419,6 +472,14 @@ function createDefaultConfig(): DaemonConfig {
       "computer.window",
       "computer.app",
       "computer.accessibility_tree",
+      "background.run",
+      "background.schedule",
+      "notification.approval_request",
+      "swarm.spawn",
+      "swarm.delegate",
+      "memory.save",
+      "memory.save_fact",
+      "memory.forget",
     ],
     plugins: [
       {
@@ -433,6 +494,11 @@ function createDefaultConfig(): DaemonConfig {
       { manifestPath: "plugins/voice-output/plugin.json", enabled: false },
       { manifestPath: "plugins/vision/plugin.json", enabled: false },
       { manifestPath: "plugins/computer-control/plugin.json", enabled: false },
+      { manifestPath: "plugins/background-worker/plugin.json", enabled: false },
+      { manifestPath: "plugins/notifications/plugin.json", enabled: false },
+      { manifestPath: "plugins/swarm-orchestrator/plugin.json", enabled: false },
+      { manifestPath: "plugins/memory-persistent/plugin.json", enabled: false },
+      { manifestPath: "plugins/memory-semantic/plugin.json", enabled: false },
     ],
     modelProviders: [
       {
@@ -470,6 +536,7 @@ function parseConfig(value: unknown): DaemonConfig {
     throw new Error("Daemon config must be an object.");
   }
   const record = value as Partial<DaemonConfig>;
+  const defaults = createDefaultConfig();
   return {
     statePath:
       typeof record.statePath === "string" ? record.statePath : ".andy/state.json",
@@ -487,21 +554,43 @@ function parseConfig(value: unknown): DaemonConfig {
       typeof record.backgroundPollMs === "number" && record.backgroundPollMs > 0
         ? record.backgroundPollMs
         : 5_000,
-    allowedCapabilities: Array.isArray(record.allowedCapabilities)
-      ? record.allowedCapabilities.filter((item) => typeof item === "string")
-      : createDefaultConfig().allowedCapabilities,
-    approvalRequiredCapabilities: Array.isArray(record.approvalRequiredCapabilities)
-      ? record.approvalRequiredCapabilities.filter((item) => typeof item === "string")
-      : createDefaultConfig().approvalRequiredCapabilities,
-    plugins: Array.isArray(record.plugins)
-      ? record.plugins.flatMap(parsePluginConfig)
-      : createDefaultConfig().plugins,
+    allowedCapabilities: mergeStringDefaults(
+      record.allowedCapabilities,
+      defaults.allowedCapabilities,
+    ),
+    approvalRequiredCapabilities: mergeStringDefaults(
+      record.approvalRequiredCapabilities,
+      defaults.approvalRequiredCapabilities,
+    ),
+    plugins: mergePluginDefaults(record.plugins, defaults.plugins),
     modelProviders: Array.isArray(record.modelProviders)
       ? record.modelProviders.flatMap(parseModelProviderConfig)
-      : createDefaultConfig().modelProviders,
+      : defaults.modelProviders,
     remoteControl: parseRemoteControlConfig(record.remoteControl),
     http: parseHttpConfig(record.http),
   };
+}
+
+function mergeStringDefaults(value: unknown, defaults: readonly string[]): string[] {
+  const configured = Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+  return [...new Set([...configured, ...defaults])];
+}
+
+function mergePluginDefaults(
+  value: unknown,
+  defaults: readonly DaemonPluginConfig[],
+): DaemonPluginConfig[] {
+  const configured = Array.isArray(value) ? value.flatMap(parsePluginConfig) : [];
+  const byPath = new Map<string, DaemonPluginConfig>();
+  for (const plugin of defaults) {
+    byPath.set(plugin.manifestPath, plugin);
+  }
+  for (const plugin of configured) {
+    byPath.set(plugin.manifestPath, plugin);
+  }
+  return [...byPath.values()];
 }
 
 function createDefaultPolicyConfig(config: DaemonConfig): PolicyConfig {
@@ -1007,6 +1096,11 @@ function installLocalPlugin(
       {
         ...manifest,
         entry: relativizeEntry(manifest.entry, sourceRoot),
+        ...(manifest.binaryEntrypoint
+          ? {
+              binaryEntrypoint: relativizeEntry(manifest.binaryEntrypoint, sourceRoot),
+            }
+          : {}),
       },
       existing._tag === "Right" ? existing.right : undefined,
     );
@@ -1082,6 +1176,14 @@ function installGitHubPlugin(
       {
         ...manifest,
         entry: relativizeEntry(manifest.entry, checkoutPath),
+        ...(manifest.binaryEntrypoint
+          ? {
+              binaryEntrypoint: relativizeEntry(
+                manifest.binaryEntrypoint,
+                checkoutPath,
+              ),
+            }
+          : {}),
       },
       existing._tag === "Right" ? existing.right : undefined,
     );

@@ -14,6 +14,7 @@
     "build": "bun run --filter './packages/*' build && bun run --filter './plugins/*' build && bun run --filter './apps/*' build",
     "build:binary": "bun run --filter @andy/cli build:binary",
     "build:daemon-binary": "bun run --filter @andy/daemon build:binary",
+    "build:plugin-binaries": "bun run --filter './plugins/*' build:binary",
     "check": "bun run lint && bun run fmt:check && bun run typecheck && bun run test",
     "daemon": "bun run --filter @andy/daemon dev",
     "dev": "bun run --filter @andy/cli dev",

@@ -155,6 +155,7 @@ export interface PluginManifest {
   name: string;
   version: string;
   entry: string;
+  binaryEntrypoint?: string;
   capabilities: Capability[];
   tools?: PluginManifestTool[];
   risk: RiskLevel;
@@ -267,6 +268,7 @@ export const PluginManifestSchema = Schema.Struct({
   name: Schema.String,
   version: Schema.String,
   entry: Schema.String,
+  binaryEntrypoint: Schema.optional(Schema.String),
   capabilities: Schema.Array(Schema.String),
   tools: Schema.optional(
     Schema.Array(

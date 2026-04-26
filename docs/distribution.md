@@ -28,6 +28,18 @@ The output is:
 dist/andy-daemon
 ```
 
+Build first-party plugin binaries with:
+
+```bash
+bun run build:plugin-binaries
+```
+
+Each subprocess plugin emits:
+
+```text
+plugins/<plugin-id>/dist/plugin
+```
+
 This uses Bun's standalone executable compiler:
 
 ```bash
@@ -40,8 +52,9 @@ bun build --compile --target=bun --outfile=../../dist/andy ./src/index.ts
 - Release artifacts should be compiled binaries.
 - First target is the local platform binary.
 - Later release automation should produce per-platform binaries for macOS, Linux, and Windows.
-- Plugin packages are still source/package artifacts loaded by Andy; the main user-facing daemon/CLI should be a binary.
-- Current subprocess plugins are launched with Bun by the plugin host. To fully remove the runtime requirement for plugin execution too, first-party plugins need to be compiled to binaries or loaded through an embedded worker/host path. The main Andy CLI/daemon binaries themselves do not require users to invoke Bun.
+- First-party plugin packages include a source entrypoint for development and a `binaryEntrypoint` for release.
+- The subprocess host prefers `binaryEntrypoint` when the file exists and falls back to the source entrypoint with Bun for development.
+- A user-facing release should package `dist/andy`, `dist/andy-daemon`, first-party plugin manifests, and each plugin's compiled `dist/plugin` binary.
 
 ## CLI Operations
 
@@ -68,6 +81,9 @@ bun run check
 bun run build
 bun run build:binary
 bun run build:daemon-binary
+bun run build:plugin-binaries
 ./dist/andy "binary smoke"
 ./dist/andy-daemon --status
 ```
+
+To validate plugin execution without invoking Bun for plugin workers, temporarily run the daemon with `bun` unavailable on `PATH` after `bun run build:plugin-binaries`; enabled first-party plugins should still start through their `binaryEntrypoint`.

@@ -154,6 +154,8 @@ Pending approvals can be expired and cleared from the parked-action table. Runti
 
 Hosted plugins should be started through the core lifecycle manager. The manager starts the selected host, registers the hosted proxy tools with the runtime, audits lifecycle events, and stops handles during shutdown. If runtime registration fails, the host handle is stopped so plugin code is not left running without registered policy gates.
 
+First-party subprocess plugin manifests include both `entry` and `binaryEntrypoint`. Development can run the source entrypoint through Bun, but release builds compile each first-party plugin to `dist/plugin`. The subprocess host launches `binaryEntrypoint` when it exists, so release packages do not require Bun for first-party plugin execution.
+
 Plugin hosts report health as `running`, `stopped`, or `crashed`. The daemon exposes host health in status output and can call lifecycle restart supervision through `POST /plugins/restart-crashed`. If restart fails, runtime proxy tools are disabled so crashed plugins do not remain callable.
 
 Plugin packages installed from a reviewed plan are materialized disabled by default. Enabling remains a separate lifecycle step so install, review, enable, and runtime execution stay distinct audit points.
@@ -203,6 +205,11 @@ Implemented first-party system plugins:
 - `@andy/plugin-telegram` uses the official Telegram Bot API for polling, send, webhook setup, and update normalization.
 - `@andy/plugin-whatsapp` uses the official Meta Graph API for outbound messages and webhook payload verification/normalization.
 - `@andy/plugin-voice-input`, `@andy/plugin-voice-output`, `@andy/plugin-vision`, and `@andy/plugin-computer-control` expose strict capability surfaces while native capture/provider depth is added incrementally.
+- `@andy/plugin-background-worker` persists background task requests, scheduled task records, and cancellation state inside plugin storage; privileged resumed work still re-enters core policy.
+- `@andy/plugin-notifications` records notification and approval-request deliveries through a manifest-declared notification surface.
+- `@andy/plugin-swarm-orchestrator` manages bounded swarm plan/spawn/delegate/join/cancel state inside the manifest's agent-count, depth, role, and capability limits.
+- `@andy/plugin-memory-persistent` stores structured persistent memory records in plugin-owned JSON storage with save/fetch/query/list/forget tools.
+- `@andy/plugin-memory-semantic` stores inspectable semantic memory records with a deterministic local vector index; it does not hide memory solely inside an opaque vector database.
 
 These plugins run through subprocess hosting, register only manifest-declared proxy tools, and have lifecycle tests for the security-sensitive paths. Capability behavior stays out of core.
 

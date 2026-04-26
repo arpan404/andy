@@ -7,7 +7,7 @@ This list tracks the first production path now that the core kernel is ready eno
 1. Build the first real first-party plugin: `memory-markdown`. Done.
 2. Load `memory-markdown` through the plugin lifecycle manager. Done.
 3. Build a real daemon app that boots config, installed plugins, background polling, and shutdown. Done.
-4. Ship the daemon/CLI as a standalone binary so users do not need Bun or another JS runtime. CLI and daemon binary scripts are in place; plugin subprocesses still need a no-runtime strategy.
+4. Ship the daemon/CLI and first-party subprocess plugins as standalone binaries so users do not need Bun or another JS runtime. Done for core binaries and first-party plugin binaries.
 5. Add OpenAI as the first model provider package/plugin. Done.
 6. Build Telegram remote-control flow through the communication bridge. Done for polling and webhook ingress.
 7. Build WhatsApp remote-control flow through the communication bridge. Done for webhook ingress.
@@ -16,6 +16,8 @@ This list tracks the first production path now that the core kernel is ready eno
 10. Build voice, vision, and computer-control plugins behind strict manifests. Done for first subprocess tool surfaces; native provider depth remains incremental.
 11. Complete core storage, plugin management, host supervision, active cancellation, and durable policy config. Done.
 12. Add binary CLI commands for daemon status, plugin management, and approval decisions. Done.
+13. Compile first-party plugin workers as standalone binaries and prefer binary plugin launch in release. Done.
+14. Implement remaining first-class system plugins: background-worker, notifications, swarm-orchestrator, persistent memory, and semantic memory. Done.
 
 ## Core Completion Todo
 
@@ -43,6 +45,8 @@ This list tracks the first production path now that the core kernel is ready eno
 - Daemon HTTP now exposes `GET /plugins`, `POST /plugins/install-local`, `POST /plugins/install-github`, `POST /plugins/:id/enable`, `POST /plugins/:id/disable`, `POST /plugins/:id/remove`, and `POST /plugins/restart-crashed`.
 - GitHub plugin installs clone immutable commit SHA or semver release tag refs into `.andy/github-plugins`, load the manifest from the checkout, and persist the checkout path in the installed-plugin registry.
 - CLI now exposes daemon-backed plugin commands for list, local install, GitHub install, enable, disable, remove, restart crashed hosts, and approval list/approve/deny.
+- First-party subprocess plugin manifests now include `binaryEntrypoint`, and the host launches compiled plugin binaries when present before falling back to Bun source entrypoints for development.
+- Daemon config parsing merges new default first-party plugin entries and capability gates into existing local configs so upgrades seed newly added plugins disabled-by-default.
 - Plugin lifecycle reports host health and can restart crashed plugin hosts; failed restarts disable runtime proxy tools.
 - Active runtime cancellation races in-flight tool effects and interrupts hosted worker/subprocess calls.
 - Policy config supports per-plugin/channel/risk rules and expiring grants.
@@ -90,7 +94,12 @@ This list tracks the first production path now that the core kernel is ready eno
 - Added `@andy/plugin-voice-input` and `@andy/plugin-voice-output` capability surfaces for explicit activation, transcript handoff, and local speech output.
 - Added `@andy/plugin-vision` for screen capture and image/OCR provider handoff surfaces.
 - Added `@andy/plugin-computer-control` for gated macOS accessibility actions, disabled unless `ANDY_ENABLE_COMPUTER_CONTROL=1`.
-- Added lifecycle tests for scoped filesystem behavior, shell approval parking, and messaging normalization.
+- Added `@andy/plugin-background-worker` for durable background task request, schedule, and cancellation records in plugin-owned storage.
+- Added `@andy/plugin-notifications` for notification and approval-request delivery records.
+- Added `@andy/plugin-swarm-orchestrator` for bounded swarm plan, spawn, delegate, join, and cancel records behind manifest limits.
+- Added `@andy/plugin-memory-persistent` for JSON-backed persistent memory save, fetch, query, list, and forget operations.
+- Added `@andy/plugin-memory-semantic` for inspectable semantic memory records with deterministic local vector indexing.
+- Added lifecycle tests for scoped filesystem behavior, shell approval parking, messaging normalization, background/notification/swarm tools, persistent memory, and semantic memory.
 
 ### Telegram Remote Control
 

@@ -8,7 +8,7 @@ Andy Core should stay small and trusted. It should provide the kernel, policy bo
 - CLI binary packaging uses Bun standalone executable compilation through `bun run build:binary`.
 - Daemon app boots config, loads enabled plugin manifests through lifecycle, polls due background jobs, saves state, handles shutdown, and can be compiled with `bun run build:daemon-binary`.
 - AI SDK model provider package (`@andy/model-ai-sdk`) registers Vercel AI SDK models behind the core model-provider registry. Andy does not integrate with provider-native SDKs directly.
-- First-party system plugins now exist for Markdown memory, scoped filesystem access, approval-gated shell execution, Telegram, WhatsApp, voice input/output, vision, and computer-control capability surfaces.
+- First-party system plugins now exist for Markdown memory, persistent memory, semantic memory, scoped filesystem access, approval-gated shell execution, Telegram, WhatsApp, voice input/output, vision, computer-control, background-worker, notifications, and swarm-orchestrator capability surfaces.
 - Daemon remote control supports Telegram polling/webhook mode and WhatsApp webhook mode: inbound messages are normalized, published through the communication bridge, handled by an agent session using a configured AI SDK model provider, and replied to through the channel plugin.
 - Daemon HTTP ingress exposes health/status, approval list/decision endpoints, and Telegram/WhatsApp webhook endpoints with optional shared-secret verification.
 - Agent session kernel with AI SDK result types.
@@ -122,12 +122,12 @@ JSON file storage is acceptable for the first local release. A later multi-user 
 
 ### Background Job Kernel
 
-Core has initial background scheduling, cancellation ids, due-job lookup, progress events, hydration, due-job execution through runtime policy, and status transitions.
+Core has initial background scheduling, cancellation ids, due-job lookup, progress events, hydration, due-job execution through runtime policy, status transitions, and a first-party background-worker plugin that stores task request/schedule/cancel records in plugin-owned storage.
 
 Still needed:
 
 - persist richer task state
-- background-worker plugin depth for long-running product workflows
+- provider-specific long-running workflow adapters
 - prevent stale elevated permissions with narrower grant scopes
 
 The actual long-running behaviors should still be plugins.
@@ -159,6 +159,8 @@ The first-party plugin packages are now real subprocess-hosted packages with man
 - Vision needs OCR and vision-model provider integration.
 - Computer control needs a richer accessibility adapter and cross-platform implementations.
 - Filesystem sensitive reads need a separate `filesystem.read_sensitive` tool and policy path.
+- Notifications need native desktop and remote notification adapters beyond plugin-storage delivery records.
+- Swarm orchestration currently manages bounded swarm state; executing child agent sessions across the daemon remains the next provider-specific adapter.
 
 ### Capability And Policy Refinement
 

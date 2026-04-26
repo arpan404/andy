@@ -3,6 +3,7 @@
   "name": "Vision",
   "version": "0.1.0",
   "entry": "./dist/index.js",
+  "binaryEntrypoint": "./dist/plugin",
   "executionMode": "subprocess",
   "capabilities": ["camera.read", "screen.capture", "screen.ocr", "screen.describe"],
   "risk": "high",

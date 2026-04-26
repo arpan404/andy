@@ -31,7 +31,11 @@ import {
   WorkerManifestPluginHost,
   type WorkerPluginHostHandle,
 } from "./plugin-host.js";
-import { verifyProcessIsolationProfile } from "./plugin-sandbox.js";
+import {
+  buildSandboxedLaunchCommand,
+  PluginSandboxFactory,
+  verifyProcessIsolationProfile,
+} from "./plugin-sandbox.js";
 
 describe("core kernel services", () => {
   test("creates approval requests for ask policy decisions", async () => {
@@ -955,6 +959,28 @@ describe("core kernel services", () => {
     expect(result._tag).toBe("Failure");
   });
 
+  test("builds binary plugin launch commands without Bun", async () => {
+    const sandbox = await Effect.runPromise(
+      new PluginSandboxFactory().create({ pluginId: "andy.test.binary-launch" }),
+    );
+    const command = await Effect.runPromise(
+      buildSandboxedLaunchCommand({
+        bunExecutable: "/missing/bun",
+        entry: "/ignored/source.ts",
+        binaryEntrypoint: "/plugins/example/dist/plugin",
+        profile: { kind: "process-boundary" },
+        sandbox,
+      }),
+    );
+    await Effect.runPromise(sandbox.dispose());
+
+    expect(command).toEqual({
+      command: "/plugins/example/dist/plugin",
+      args: [],
+      runtime: "binary",
+    });
+  });
+
   test("creates daemon service graph", async () => {
     const daemon = await Effect.runPromise(
       createAndyDaemon({
@@ -1255,6 +1281,135 @@ describe("core kernel services", () => {
         },
       ],
     });
+  });
+
+  test("loads first-party background, notification, swarm, persistent memory, and semantic memory plugins", async () => {
+    const audit = new ConsoleAuditSink();
+    const runtime = new AgentRuntime({
+      audit,
+      policy: new CapabilityPolicy({
+        allowedCapabilities: new Set([
+          "background.run",
+          "background.schedule",
+          "background.cancel",
+          "notification.send",
+          "notification.approval_request",
+          "swarm.plan",
+          "swarm.spawn",
+          "swarm.delegate",
+          "swarm.join",
+          "swarm.cancel",
+          "memory.save",
+          "memory.save_fact",
+          "memory.fetch",
+          "memory.query",
+          "memory.list",
+          "memory.forget",
+          "memory.embed",
+          "memory.semantic_query",
+        ]),
+      }),
+    });
+    const lifecycle = new PluginLifecycleManager({
+      audit,
+      runtime,
+      host: new SubprocessManifestPluginHost({ audit }),
+    });
+    const manifests = await Promise.all(
+      [
+        "background-worker",
+        "notifications",
+        "swarm-orchestrator",
+        "memory-persistent",
+        "memory-semantic",
+      ].map(async (name) => ({
+        ...parsePluginManifest(
+          JSON.parse(await readFile(resolve(`plugins/${name}/plugin.json`), "utf8")),
+        ),
+        entry: resolve(`plugins/${name}/src/index.ts`),
+      })),
+    );
+    for (const manifest of manifests) {
+      await Effect.runPromise(lifecycle.start(manifest));
+    }
+
+    const scheduled = await Effect.runPromise(
+      runtime.executeTool("andy.background-worker.background.schedule", {
+        taskName: "refresh",
+        delayMs: 1000,
+        payload: { kind: "test" },
+      }),
+    );
+    const cancelled = await Effect.runPromise(
+      runtime.executeTool("andy.background-worker.background.cancel", {
+        id: String((scheduled.output as { id?: unknown }).id),
+      }),
+    );
+    const notification = await Effect.runPromise(
+      runtime.executeTool("andy.notifications.notification.send", {
+        text: "done",
+      }),
+    );
+    const swarm = await Effect.runPromise(
+      runtime.executeTool("andy.swarm-orchestrator.swarm.spawn", {
+        goal: "review changes",
+        roles: ["planner", "reviewer"],
+      }),
+    );
+    const swarmOutput = swarm.output as {
+      id: string;
+      agents: readonly { id: string }[];
+    };
+    const delegated = await Effect.runPromise(
+      runtime.executeTool("andy.swarm-orchestrator.swarm.delegate", {
+        swarmId: swarmOutput.id,
+        agentId: swarmOutput.agents[0]?.id,
+        task: "inspect tests",
+      }),
+    );
+    const persistentSaved = await Effect.runPromise(
+      runtime.executeTool("andy.memory.persistent.memory.save", {
+        key: "theme",
+        value: "dark",
+        namespace: "preferences",
+      }),
+    );
+    const persistentQuery = await Effect.runPromise(
+      runtime.executeTool("andy.memory.persistent.memory.query", {
+        namespace: "preferences",
+        key: "theme",
+      }),
+    );
+    const semanticSaved = await Effect.runPromise(
+      runtime.executeTool("andy.memory.semantic.memory.save", {
+        key: "project",
+        text: "Andy is a plugin-native agent runtime",
+        tags: ["architecture"],
+      }),
+    );
+    const semanticQuery = await Effect.runPromise(
+      runtime.executeTool("andy.memory.semantic.memory.semantic_query", {
+        text: "plugin runtime",
+        tags: ["architecture"],
+      }),
+    );
+    await Effect.runPromise(lifecycle.stopAll());
+
+    expect(cancelled.output).toMatchObject({ status: "cancelled" });
+    expect(notification.output).toMatchObject({ sent: true, text: "done" });
+    expect(delegated.output).toMatchObject({
+      swarmId: swarmOutput.id,
+      agent: { task: "inspect tests" },
+    });
+    expect(persistentSaved.output).toMatchObject({
+      key: "theme",
+      value: "dark",
+    });
+    expect(persistentQuery.output).toEqual([persistentSaved.output]);
+    expect(semanticSaved.output).toMatchObject({ key: "project" });
+    expect(semanticQuery.output).toEqual(
+      expect.arrayContaining([expect.objectContaining({ key: "project" })]),
+    );
   });
 
   test("rejects tools that declare they cannot run in a sandboxed host", async () => {

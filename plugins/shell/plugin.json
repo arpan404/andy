@@ -3,6 +3,7 @@
   "name": "Shell",
   "version": "0.1.0",
   "entry": "./dist/index.js",
+  "binaryEntrypoint": "./dist/plugin",
   "executionMode": "subprocess",
   "capabilities": ["shell.execute"],
   "risk": "critical",

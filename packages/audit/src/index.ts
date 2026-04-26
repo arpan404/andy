@@ -28,6 +28,7 @@ export type AuditEvent = AuditEventMetadata &
         type: "plugin.host.started" | "plugin.host.stopped";
         pluginId: string;
         executionMode: string;
+        runtime?: "bun" | "binary";
       }
     | {
         type: "plugin.lifecycle.started" | "plugin.lifecycle.stopped";

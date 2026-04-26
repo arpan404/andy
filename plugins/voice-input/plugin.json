@@ -3,6 +3,7 @@
   "name": "Voice Input",
   "version": "0.1.0",
   "entry": "./dist/index.js",
+  "binaryEntrypoint": "./dist/plugin",
   "executionMode": "subprocess",
   "capabilities": ["voice.listen", "voice.transcribe", "microphone.read"],
   "risk": "high",

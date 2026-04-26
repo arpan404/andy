@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Effect } from "effect";
-import { definePlugin, defineTool } from "./index.js";
+import { definePlugin, defineTool, parsePluginManifest } from "./index.js";
 
 describe("definePlugin", () => {
   test("rejects tools that request undeclared capabilities", () => {
@@ -78,5 +78,20 @@ describe("definePlugin", () => {
         ],
       }),
     ).not.toThrow();
+  });
+
+  test("parses optional binary entrypoints", () => {
+    const manifest = parsePluginManifest({
+      id: "test.binary-plugin",
+      name: "Binary Plugin",
+      version: "0.1.0",
+      entry: "./dist/index.js",
+      binaryEntrypoint: "./dist/plugin",
+      executionMode: "subprocess",
+      capabilities: ["memory.fetch"],
+      risk: "low",
+    });
+
+    expect(manifest.binaryEntrypoint).toBe("./dist/plugin");
   });
 });

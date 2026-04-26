@@ -3,6 +3,7 @@
   "name": "Filesystem",
   "version": "0.1.0",
   "entry": "./dist/index.js",
+  "binaryEntrypoint": "./dist/plugin",
   "executionMode": "subprocess",
   "capabilities": ["filesystem.read", "filesystem.write", "filesystem.delete"],
   "risk": "high",

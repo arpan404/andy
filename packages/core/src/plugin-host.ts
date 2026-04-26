@@ -10,6 +10,7 @@ import type {
 import { isJsonValue, type JsonValue } from "@andy/types";
 import { Effect } from "effect";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { existsSync } from "node:fs";
 import { createInterface, type Interface as ReadLineInterface } from "node:readline";
 import {
   PluginHostUnsupportedError,
@@ -45,6 +46,7 @@ export type PluginHostHealth =
       pluginId: string;
       executionMode: PluginExecutionMode;
       startedAt: Date;
+      runtime?: "bun" | "binary";
     }
   | {
       status: "stopped";
@@ -52,6 +54,7 @@ export type PluginHostHealth =
       executionMode: PluginExecutionMode;
       startedAt: Date;
       stoppedAt: Date;
+      runtime?: "bun" | "binary";
     }
   | {
       status: "crashed";
@@ -62,6 +65,7 @@ export type PluginHostHealth =
       exitCode?: number;
       signal?: string;
       reason: string;
+      runtime?: "bun" | "binary";
     };
 
 export interface WorkerPluginHostHandle extends PluginHostHandle {
@@ -451,6 +455,9 @@ export class SubprocessManifestPluginHost implements ManifestPluginHost {
       const launchCommand = yield* buildSandboxedLaunchCommand({
         bunExecutable: self.#bunExecutable,
         entry: manifest.entry,
+        ...(manifest.binaryEntrypoint && existsSync(manifest.binaryEntrypoint)
+          ? { binaryEntrypoint: manifest.binaryEntrypoint }
+          : {}),
         profile: self.#processIsolation,
         sandbox,
       });
@@ -464,6 +471,7 @@ export class SubprocessManifestPluginHost implements ManifestPluginHost {
         pluginId: manifest.id,
         executionMode,
         startedAt: new Date(),
+        runtime: launchCommand.runtime,
       };
       let stopping = false;
       const stdout = createInterface({ input: child.stdout });
@@ -477,6 +485,7 @@ export class SubprocessManifestPluginHost implements ManifestPluginHost {
             executionMode,
             startedAt: health.startedAt,
             crashedAt: new Date(),
+            runtime: launchCommand.runtime,
             ...(typeof code === "number" ? { exitCode: code } : {}),
             ...(signal ? { signal } : {}),
             reason: `Plugin subprocess exited with code ${String(code)} signal ${String(signal)}.`,
@@ -493,6 +502,7 @@ export class SubprocessManifestPluginHost implements ManifestPluginHost {
         type: "plugin.host.started",
         pluginId: manifest.id,
         executionMode,
+        runtime: launchCommand.runtime,
       });
 
       const handle: WorkerPluginHostHandle = {
@@ -514,6 +524,7 @@ export class SubprocessManifestPluginHost implements ManifestPluginHost {
               executionMode,
               startedAt: health.startedAt,
               stoppedAt: new Date(),
+              runtime: launchCommand.runtime,
             };
           }).pipe(
             Effect.zipRight(

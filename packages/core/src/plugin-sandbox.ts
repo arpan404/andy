@@ -86,19 +86,28 @@ export interface ProcessIsolationProfile {
 export interface ProcessLaunchCommand {
   command: string;
   args: readonly string[];
+  runtime: "bun" | "binary";
 }
 
 export function buildSandboxedLaunchCommand(options: {
   bunExecutable: string;
   entry: string;
+  binaryEntrypoint?: string;
   profile: ProcessIsolationProfile;
   sandbox: PluginSandbox;
 }): Effect.Effect<ProcessLaunchCommand, PluginSandboxError> {
   return Effect.fn("buildSandboxedLaunchCommand")(function* () {
+    const executable = options.binaryEntrypoint ?? options.bunExecutable;
+    const executableArgs = options.binaryEntrypoint ? [] : [options.entry];
+    const runtime: ProcessLaunchCommand["runtime"] = options.binaryEntrypoint
+      ? "binary"
+      : "bun";
+
     if (options.profile.kind === "process-boundary") {
       return {
-        command: options.bunExecutable,
-        args: [options.entry],
+        command: executable,
+        args: executableArgs,
+        runtime,
       };
     }
 
@@ -124,7 +133,8 @@ export function buildSandboxedLaunchCommand(options: {
       });
       return {
         command: "sandbox-exec",
-        args: ["-f", profilePath, options.bunExecutable, options.entry],
+        args: ["-f", profilePath, executable, ...executableArgs],
+        runtime,
       };
     }
 
@@ -143,9 +153,10 @@ export function buildSandboxedLaunchCommand(options: {
         "-v",
         `${options.sandbox.scratchRoot}:/andy/scratch:rw`,
         options.profile.containerImage ?? "oven/bun:latest",
-        "bun",
-        options.entry,
+        executable,
+        ...executableArgs,
       ],
+      runtime,
     };
   })();
 }
