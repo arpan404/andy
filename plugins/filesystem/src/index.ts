@@ -27,6 +27,8 @@ startWorkerPlugin((request) =>
     switch (request.toolName) {
       case "filesystem.read":
         return yield* readPath(request.input);
+      case "filesystem.read_sensitive":
+        return yield* readSensitivePath(request.input);
       case "filesystem.list":
         return yield* listPath(request.input);
       case "filesystem.write":
@@ -54,6 +56,28 @@ function readPath(input: JsonValue): Effect.Effect<JsonValue, unknown> {
     return {
       path,
       encoding,
+      content: encoding === "base64" ? data.toString("base64") : data.toString("utf8"),
+    };
+  })();
+}
+
+function readSensitivePath(input: JsonValue): Effect.Effect<JsonValue, unknown> {
+  return Effect.fn("filesystem.readSensitive")(function* () {
+    const parsed = requireObject(input, "filesystem.read_sensitive");
+    const path = resolveScopedPath(
+      requireString(parsed, "path"),
+      sensitiveReadRoots,
+      "sensitive read",
+    );
+    const encoding = optionalString(parsed, "encoding") ?? "utf8";
+    if (encoding !== "utf8" && encoding !== "base64") {
+      return yield* Effect.fail(new Error("encoding must be 'utf8' or 'base64'."));
+    }
+    const data = yield* Effect.tryPromise(() => readFile(path));
+    return {
+      path,
+      encoding,
+      sensitive: true,
       content: encoding === "base64" ? data.toString("base64") : data.toString("utf8"),
     };
   })();

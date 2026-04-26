@@ -164,6 +164,7 @@ export interface PluginManifest {
   permissions?: PluginPermissions;
   swarm?: SwarmManifest;
   memory?: MemoryManifest;
+  bundledSkills?: string[];
 }
 
 export interface PluginManifestTool {
@@ -370,6 +371,7 @@ export const PluginManifestSchema = Schema.Struct({
       ),
     }),
   ),
+  bundledSkills: Schema.optional(Schema.Array(Schema.String)),
 });
 
 export class PluginToolCapabilityUndeclaredError extends Schema.TaggedError<PluginToolCapabilityUndeclaredError>()(

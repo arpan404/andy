@@ -16,6 +16,8 @@
     "@andy/plugin-manager": "workspace:*",
     "@andy/plugin-sdk": "workspace:*",
     "@andy/policy": "workspace:*",
+    "@andy/skill-manager": "workspace:*",
+    "@andy/skill-sdk": "workspace:*",
     "@andy/types": "workspace:*",
     "effect": "^3.21.2"
   },

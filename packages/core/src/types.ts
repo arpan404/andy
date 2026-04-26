@@ -88,6 +88,7 @@ export interface AgentRunInput {
   role?: AgentRole;
   depth?: number;
   systemPrompt?: string;
+  skillInstructions?: string;
   userMessage: string;
   userId?: string;
   channelId?: string;

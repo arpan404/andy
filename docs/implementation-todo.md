@@ -18,6 +18,8 @@ This list tracks the first production path now that the core kernel is ready eno
 12. Add binary CLI commands for daemon status, plugin management, and approval decisions. Done.
 13. Compile first-party plugin workers as standalone binaries and prefer binary plugin launch in release. Done.
 14. Implement remaining first-class system plugins: background-worker, notifications, swarm-orchestrator, persistent memory, and semantic memory. Done.
+15. Implement a real skills subsystem with typed manifests, durable registry, daemon APIs, CLI commands, and first-party skills. Done.
+16. Implement bundled skill discovery, skill-aware agent prompt context, project coding plugin, richer declarative skill workflow controls, install review APIs, more AI SDK providers, native-depth improvements, sensitive filesystem reads, and local web console. Done.
 
 ## Core Completion Todo
 
@@ -50,6 +52,11 @@ This list tracks the first production path now that the core kernel is ready eno
 - Plugin lifecycle reports host health and can restart crashed plugin hosts; failed restarts disable runtime proxy tools.
 - Active runtime cancellation races in-flight tool effects and interrupts hosted worker/subprocess calls.
 - Policy config supports per-plugin/channel/risk rules and expiring grants.
+- Skills are now declarative workflow packages with `@andy/skill-sdk`, `@andy/skill-manager`, `.andy/skills.json`, daemon APIs, and CLI commands.
+- Skill execution composes fully qualified plugin tools through the normal runtime path, so policy, approval, audit, schemas, and plugin lifecycle still apply.
+- Plugin installs now discover bundled `skills/**/skill.json` manifests and install them as plugin-owned skill records.
+- Skill workflows support `when`, `forEach`, `continueOnError`, and `saveAs` while remaining declarative.
+- Agent runs can receive skill instructions, and daemon `POST /agent/run` can inject enabled skills into the model context.
 - Added a durable JSON-file plugin registry in `@andy/plugin-manager`.
 - Installed plugin records now persist manifest, source, lifecycle status, install time, and update time.
 - Daemon boot now seeds the registry from config and starts enabled plugins from installed-plugin records.
@@ -100,6 +107,27 @@ This list tracks the first production path now that the core kernel is ready eno
 - Added `@andy/plugin-memory-persistent` for JSON-backed persistent memory save, fetch, query, list, and forget operations.
 - Added `@andy/plugin-memory-semantic` for inspectable semantic memory records with deterministic local vector indexing.
 - Added lifecycle tests for scoped filesystem behavior, shell approval parking, messaging normalization, background/notification/swarm tools, persistent memory, and semantic memory.
+
+### Skills
+
+- Added `@andy/skill-sdk` for typed skill manifests and workflow validation.
+- Added `@andy/skill-manager` for durable install, enable, disable, remove, upgrade, and list state.
+- Added daemon skill APIs for listing, installing, lifecycle mutation, and workflow execution.
+- Added CLI `andy skill ...` commands.
+- Added first-party skills under `skills/remember` and `skills/shell-note`.
+- Added `@andy/plugin-project` with scoped project read/write/search/diff/run-check tools.
+- Added project-bundled coding skills for Effect TS and React work.
+- Added local install review endpoints for plugins and skills.
+- Added AI SDK Anthropic and Google provider adapters alongside OpenAI.
+- Added `filesystem.read_sensitive` as a separate critical capability with explicit sensitive roots.
+- Added a local `@andy/web` console for daemon status, plugin/skill visibility, and skill execution.
+
+### Release Packaging
+
+- Added `bun run package:release` to assemble compiled release artifacts into `dist/release/andy-<version>-<platform>-<arch>/`.
+- Added `bun run build:release` to build workspaces, plugin binaries, CLI binary, daemon binary, and the release package in one command.
+- The release package includes `bin/andy`, `bin/andy-daemon`, built web assets, global first-party skills, first-party plugin manifests, plugin worker binaries, plugin-bundled skills, and `release.json`.
+- Packaging fails when a required binary, manifest, skill, or web asset is missing, so release validation catches incomplete runtime-free bundles.
 
 ### Telegram Remote Control
 

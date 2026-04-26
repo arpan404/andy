@@ -1100,8 +1100,10 @@ describe("core kernel services", () => {
     const dir = await mkdtemp(join(tmpdir(), "andy-filesystem-plugin-"));
     const readRoot = join(dir, "read");
     const writeRoot = join(dir, "write");
+    const sensitiveRoot = join(dir, "sensitive");
     await mkdir(readRoot, { recursive: true });
     await mkdir(writeRoot, { recursive: true });
+    await mkdir(sensitiveRoot, { recursive: true });
     await writeFile(join(readRoot, "note.txt"), "hello", "utf8");
     const manifestText = await readFile(
       resolve("plugins/filesystem/plugin.json"),
@@ -1114,6 +1116,13 @@ describe("core kernel services", () => {
         filesystem: {
           readRoots: [readRoot],
           writeRoots: [writeRoot],
+          sensitiveReadRoots: [
+            {
+              path: sensitiveRoot,
+              reason: "test sensitive read scope",
+              dataClasses: ["other"],
+            },
+          ],
         },
       },
     };

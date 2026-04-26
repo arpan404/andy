@@ -169,6 +169,7 @@ Runtime tool execution checks cancellation tokens before a tool starts and races
 The daemon exposes local plugin management APIs:
 
 - `GET /plugins`
+- `POST /plugins/review-local`
 - `POST /plugins/install-local`
 - `POST /plugins/install-github`
 - `POST /plugins/:id/enable`
@@ -181,6 +182,7 @@ Local and GitHub install records are disabled unless explicitly enabled, and ena
 The `andy` CLI binary wraps these local daemon APIs:
 
 - `andy plugin list`
+- `andy plugin review-local <manifestPath>`
 - `andy plugin install-local <manifestPath> [--enable]`
 - `andy plugin install-github <repository-url> <commit-or-version-tag> [--manifest plugin.json] [--enable]`
 - `andy plugin enable <pluginId>`
@@ -190,10 +192,31 @@ The `andy` CLI binary wraps these local daemon APIs:
 - `andy approval list`
 - `andy approval approve <approvalId>`
 - `andy approval deny <approvalId>`
+- `andy skill list`
+- `andy skill review-local <manifestPath>`
+- `andy skill install-local <manifestPath> [--enable]`
+- `andy skill enable|disable|remove <skillId>`
+- `andy skill run <skillId> [--workflow name] [--input json]`
 
 The CLI defaults to `http://127.0.0.1:8765` and can target another daemon URL with `--url` or `ANDY_DAEMON_URL`.
 
 Policy config is durable in `.andy/policy.json`. It supports allowed capabilities, approval-required capabilities, denied plugins, approval-required channels, approval-required risk levels, explicit rules, and expiring grants scoped by plugin, capability, user, channel, or task.
+
+## Skills
+
+Skills are declarative workflow manifests, not executable plugin bundles. The skill registry is durable in `.andy/skills.json`, and skill workflow execution calls fully qualified plugin tools through the normal runtime path.
+
+Security rules:
+
+- A skill must declare every required plugin and capability.
+- A skill step must use a fully qualified tool name.
+- A skill cannot define executable tools; only plugins define tools.
+- A skill cannot run if a required plugin is disabled or removed.
+- Skill steps remain policy-checked and approval-gated at tool execution time.
+- Approval-required skill runs return an approval-required daemon response instead of marking the workflow complete.
+- Skill upgrades that add plugins or capabilities require review before enabling.
+
+Plugins may bundle skills in a `skills/` directory next to `plugin.json`. Bundled skills are installed as plugin-owned skill records, but they remain declarative manifests. Disabling or removing the owning plugin must disable or remove those bundled skills, and bundled skill upgrades that add required capabilities or required plugins require review.
 
 ## First-Party System Plugins
 

@@ -1,0 +1,42 @@
+{
+  "schemaVersion": "1",
+  "id": "andy.skills.remember",
+  "name": "Remember",
+  "version": "0.1.0",
+  "description": "Save a user-approved memory through the Markdown memory plugin.",
+  "risk": "high",
+  "requiredPlugins": ["andy.memory.markdown"],
+  "requiredCapabilities": ["memory.save"],
+  "workflows": [
+    {
+      "name": "save",
+      "description": "Save a memory record with scope, namespace, key, value, and optional source metadata.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "scope": { "type": "string" },
+          "namespace": { "type": "string" },
+          "key": { "type": "string" },
+          "value": {},
+          "source": { "type": "string" }
+        },
+        "required": ["key", "value"],
+        "additionalProperties": true
+      },
+      "steps": [
+        {
+          "id": "save-memory",
+          "toolName": "andy.memory.markdown.memory.save",
+          "description": "Persist the memory in inspectable Markdown storage.",
+          "input": {
+            "scope": "{{input.scope}}",
+            "namespace": "{{input.namespace}}",
+            "key": "{{input.key}}",
+            "value": "{{input.value}}",
+            "source": "{{input.source}}"
+          }
+        }
+      ]
+    }
+  ]
+}

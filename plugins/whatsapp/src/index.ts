@@ -6,11 +6,13 @@ import {
 } from "@andy/plugin-worker";
 import type { JsonObject, JsonValue } from "@andy/types";
 import { Effect } from "effect";
+import { createHmac, timingSafeEqual } from "node:crypto";
 
 const whatsappEnv = process.env as {
   WHATSAPP_ACCESS_TOKEN?: string;
   WHATSAPP_PHONE_NUMBER_ID?: string;
   WHATSAPP_VERIFY_TOKEN?: string;
+  WHATSAPP_APP_SECRET?: string;
 };
 const token = whatsappEnv.WHATSAPP_ACCESS_TOKEN;
 const phoneNumberId = whatsappEnv.WHATSAPP_PHONE_NUMBER_ID;
@@ -49,6 +51,15 @@ function sendMessage(input: JsonValue): Effect.Effect<JsonValue, unknown> {
 
 function verifyWebhook(input: JsonValue): JsonValue {
   const parsed = requireObject(input, "whatsapp.verifyWebhook");
+  const rawBody = optionalString(parsed, "rawBody");
+  const signature = optionalString(parsed, "signature");
+  if (rawBody && signature) {
+    return {
+      verified: verifySignature(rawBody, signature),
+      challenge: optionalString(parsed, "challenge") ?? null,
+      mode: "signature",
+    };
+  }
   const mode = optionalString(parsed, "mode");
   const tokenInput = optionalString(parsed, "verifyToken");
   const challenge = optionalString(parsed, "challenge");
@@ -57,6 +68,22 @@ function verifyWebhook(input: JsonValue): JsonValue {
     verified: Boolean(mode === "subscribe" && expected && tokenInput === expected),
     challenge: challenge ?? null,
   };
+}
+
+function verifySignature(rawBody: string, signature: string): boolean {
+  const secret = whatsappEnv.WHATSAPP_APP_SECRET;
+  if (!secret) {
+    return false;
+  }
+  const expected = `sha256=${createHmac("sha256", secret)
+    .update(rawBody)
+    .digest("hex")}`;
+  const expectedBuffer = Buffer.from(expected);
+  const signatureBuffer = Buffer.from(signature);
+  return (
+    expectedBuffer.length === signatureBuffer.length &&
+    timingSafeEqual(expectedBuffer, signatureBuffer)
+  );
 }
 
 function normalizeWebhook(input: JsonValue): JsonValue {

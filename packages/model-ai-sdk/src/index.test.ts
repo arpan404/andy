@@ -1,6 +1,10 @@
 import { Effect } from "effect";
 import { describe, expect, test } from "bun:test";
-import { createAiSdkOpenAiModelProvider } from "./index.js";
+import {
+  createAiSdkAnthropicModelProvider,
+  createAiSdkGoogleModelProvider,
+  createAiSdkOpenAiModelProvider,
+} from "./index.js";
 
 const openAiApiKeyEnv = "OPENAI_API_KEY";
 
@@ -24,5 +28,16 @@ describe("createAiSdkOpenAiModelProvider", () => {
       process.env[openAiApiKeyEnv] = original;
     }
     expect(result._tag).toBe("Failure");
+  });
+});
+
+describe("additional AI SDK providers", () => {
+  test("describes Anthropic and Google providers without provider-native SDKs", () => {
+    expect(createAiSdkAnthropicModelProvider({ apiKey: "test-key" }).pluginId).toBe(
+      "andy.model.ai-sdk.anthropic",
+    );
+    expect(createAiSdkGoogleModelProvider({ apiKey: "test-key" }).pluginId).toBe(
+      "andy.model.ai-sdk.google",
+    );
   });
 });

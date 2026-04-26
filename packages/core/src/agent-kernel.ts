@@ -230,11 +230,9 @@ export class AgentKernel {
       (this.#sessions.get(input.sessionId) ?? this.#sessionStore?.get(input.sessionId));
     if (existing) {
       const messages: AgentMessage[] = [...existing.messages];
-      if (
-        input.systemPrompt &&
-        !messages.some((message) => message.role === "system")
-      ) {
-        messages.unshift({ role: "system", content: input.systemPrompt });
+      const systemPrompt = composeSystemPrompt(input);
+      if (systemPrompt && !messages.some((message) => message.role === "system")) {
+        messages.unshift({ role: "system", content: systemPrompt });
       }
       messages.push({ role: "user", content: input.userMessage });
       return {
@@ -253,8 +251,9 @@ export class AgentKernel {
 
     const now = new Date();
     const messages: AgentMessage[] = [];
-    if (input.systemPrompt) {
-      messages.push({ role: "system", content: input.systemPrompt });
+    const systemPrompt = composeSystemPrompt(input);
+    if (systemPrompt) {
+      messages.push({ role: "system", content: systemPrompt });
     }
     messages.push({ role: "user", content: input.userMessage });
 
@@ -295,6 +294,13 @@ export class AgentKernel {
       }),
     );
   }
+}
+
+function composeSystemPrompt(input: AgentRunInput): string | undefined {
+  const parts = [input.systemPrompt, input.skillInstructions].filter(
+    (part): part is string => typeof part === "string" && part.length > 0,
+  );
+  return parts.length > 0 ? parts.join("\n\n") : undefined;
 }
 
 function applyOptionalTimeout<A, E, R>(

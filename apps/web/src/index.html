@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Andy Console</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="mast">
+        <div>
+          <p class="eyebrow">Local daemon</p>
+          <h1>Andy Console</h1>
+        </div>
+        <div class="daemon-url">
+          <label for="daemonUrl">Daemon URL</label>
+          <input id="daemonUrl" value="http://127.0.0.1:8765" />
+          <button id="refresh" type="button">Refresh</button>
+        </div>
+      </header>
+
+      <section class="status-grid">
+        <article>
+          <span>Status</span>
+          <strong id="status">unknown</strong>
+        </article>
+        <article>
+          <span>Plugins</span>
+          <strong id="pluginCount">0</strong>
+        </article>
+        <article>
+          <span>Skills</span>
+          <strong id="skillCount">0</strong>
+        </article>
+        <article>
+          <span>Approvals</span>
+          <strong id="approvalCount">0</strong>
+        </article>
+      </section>
+
+      <section class="workspace">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Plugins</h2>
+          </div>
+          <div id="plugins" class="list"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Skills</h2>
+          </div>
+          <div id="skills" class="list"></div>
+        </div>
+
+        <div class="panel command">
+          <div class="panel-head">
+            <h2>Run Skill</h2>
+          </div>
+          <label
+            >Skill ID <input id="skillId" placeholder="andy.skills.remember"
+          /></label>
+          <label>Workflow <input id="workflow" placeholder="save" /></label>
+          <label
+            >Input JSON
+            <textarea id="skillInput">{ "key": "editor", "value": "vim" }</textarea>
+          </label>
+          <button id="runSkill" type="button">Run</button>
+          <pre id="output"></pre>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

@@ -828,6 +828,10 @@ function createSandboxEnvironment(options: {
       options.manifest.permissions?.filesystem?.sensitiveReadRoots
         ?.map((root) => root.path)
         .join(",") ?? "",
+    ANDY_PLUGIN_PROJECT_ROOTS:
+      options.manifest.permissions?.filesystem?.writeRoots?.join(",") ??
+      options.manifest.permissions?.filesystem?.readRoots?.join(",") ??
+      "",
     ANDY_PLUGIN_NETWORK_HOSTS:
       options.manifest.permissions?.network?.allowedHosts.join(",") ?? "",
     ANDY_PLUGIN_ID: options.manifest.id,

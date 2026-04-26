@@ -5,7 +5,12 @@
   "entry": "./dist/index.js",
   "binaryEntrypoint": "./dist/plugin",
   "executionMode": "subprocess",
-  "capabilities": ["filesystem.read", "filesystem.write", "filesystem.delete"],
+  "capabilities": [
+    "filesystem.read",
+    "filesystem.read_sensitive",
+    "filesystem.write",
+    "filesystem.delete"
+  ],
   "risk": "high",
   "tools": [
     {
@@ -17,6 +22,26 @@
         "isolation": "sandboxed",
         "compatibleExecutionModes": ["subprocess", "container"],
         "reason": "Filesystem access is restricted to manifest-declared roots."
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "encoding": { "enum": ["utf8", "base64"] }
+        },
+        "required": ["path"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "filesystem.read_sensitive",
+      "description": "Read a UTF-8 or base64 file from explicitly declared sensitive read roots.",
+      "capabilities": ["filesystem.read_sensitive"],
+      "risk": "critical",
+      "sandbox": {
+        "isolation": "sandboxed",
+        "compatibleExecutionModes": ["subprocess", "container"],
+        "reason": "Sensitive reads require a separate capability and explicit sensitive root declarations."
       },
       "inputSchema": {
         "type": "object",
@@ -93,7 +118,14 @@
   "permissions": {
     "filesystem": {
       "readRoots": ["."],
-      "writeRoots": [".andy/workspace"]
+      "writeRoots": [".andy/workspace"],
+      "sensitiveReadRoots": [
+        {
+          "path": ".andy/sensitive",
+          "reason": "Placeholder sensitive root; users must configure real sensitive roots explicitly before use.",
+          "dataClasses": ["other"]
+        }
+      ]
     }
   }
 }

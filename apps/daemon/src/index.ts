@@ -7,13 +7,24 @@ import {
   JsonFileCoreStateStore,
 } from "@andy/core";
 import type { AndyDaemonServices } from "@andy/core";
-import { createAiSdkOpenAiModelProvider } from "@andy/model-ai-sdk";
+import {
+  createAiSdkAnthropicModelProvider,
+  createAiSdkGoogleModelProvider,
+  createAiSdkOpenAiModelProvider,
+} from "@andy/model-ai-sdk";
 import {
   createInstallPlan,
   JsonFilePluginRegistry,
   type InstalledPluginRecord,
 } from "@andy/plugin-manager";
 import { parsePluginManifest, type PluginManifest } from "@andy/plugin-sdk";
+import {
+  createSkillInstallPlan,
+  JsonFileSkillRegistry,
+  type InstalledSkillRecord,
+  type SkillInstallPlan,
+} from "@andy/skill-manager";
+import { parseSkillManifest, type SkillManifest } from "@andy/skill-sdk";
 import {
   createPolicyEngineFromConfig,
   JsonFilePolicyStore,
@@ -29,18 +40,20 @@ import { Effect } from "effect";
 import { execFile } from "node:child_process";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 
 interface DaemonConfig {
   statePath: string;
   pluginRegistryPath: string;
+  skillRegistryPath: string;
   pluginInstallRoot: string;
   policyPath: string;
   backgroundPollMs: number;
   allowedCapabilities: string[];
   approvalRequiredCapabilities: string[];
   plugins: DaemonPluginConfig[];
+  skills: DaemonSkillConfig[];
   modelProviders: DaemonModelProviderConfig[];
   remoteControl: DaemonRemoteControlConfig;
   http: DaemonHttpConfig;
@@ -51,9 +64,14 @@ interface DaemonPluginConfig {
   enabled: boolean;
 }
 
+interface DaemonSkillConfig {
+  manifestPath: string;
+  enabled: boolean;
+}
+
 interface DaemonModelProviderConfig {
   id: string;
-  provider: "ai-sdk.openai";
+  provider: "ai-sdk.openai" | "ai-sdk.anthropic" | "ai-sdk.google";
   enabled: boolean;
   modelId: string;
   apiKeyEnv?: string;
@@ -88,16 +106,21 @@ interface BootedDaemon {
   config: DaemonConfig;
   configPath: string;
   pluginRegistry: JsonFilePluginRegistry;
+  skillRegistry: JsonFileSkillRegistry;
   startedPluginIds: string[];
   installedPlugins: InstalledPluginRecord[];
+  installedSkills: InstalledSkillRecord[];
 }
 
 const args = new Set(process.argv.slice(2));
 const { ANDY_CONFIG, ANDY_HOME } = process.env;
 const repositoryRoot = resolve(
-  ANDY_HOME ?? findWorkspaceRoot(process.cwd()) ?? process.cwd(),
+  findReleaseRoot(dirname(process.execPath)) ??
+    findWorkspaceRoot(process.cwd()) ??
+    process.cwd(),
 );
-const configPath = resolveFromRoot(ANDY_CONFIG ?? ".andy/daemon.json");
+const dataRoot = resolve(ANDY_HOME ?? repositoryRoot);
+const configPath = resolveDataPath(ANDY_CONFIG ?? ".andy/daemon.json");
 
 if (args.has("--init")) {
   await writeDefaultConfig(configPath);
@@ -185,18 +208,22 @@ function bootDaemon(path: string): Effect.Effect<BootedDaemon, unknown> {
   return Effect.fn("daemon.boot")(function* () {
     const config = yield* loadOrCreateConfig(path);
     const pluginRegistry = new JsonFilePluginRegistry(
-      resolveFromRoot(config.pluginRegistryPath),
+      resolveDataPath(config.pluginRegistryPath),
     );
-    const policyStore = new JsonFilePolicyStore(resolveFromRoot(config.policyPath));
+    const skillRegistry = new JsonFileSkillRegistry(
+      resolveDataPath(config.skillRegistryPath),
+    );
+    const policyStore = new JsonFilePolicyStore(resolveDataPath(config.policyPath));
     const policyConfig = yield* policyStore.load(createDefaultPolicyConfig(config));
     const audit = new ConsoleAuditSink();
     const services = yield* createAndyDaemon({
       audit,
       policy: createPolicyEngineFromConfig(policyConfig),
-      stateStore: new JsonFileCoreStateStore(resolveFromRoot(config.statePath)),
+      stateStore: new JsonFileCoreStateStore(resolveDataPath(config.statePath)),
     });
 
-    yield* seedPluginRegistryFromConfig(pluginRegistry, config);
+    yield* seedPluginRegistryFromConfig(pluginRegistry, skillRegistry, config);
+    yield* seedSkillRegistryFromConfig(skillRegistry, config);
 
     const startedPluginIds: string[] = [];
     for (const provider of config.modelProviders) {
@@ -208,6 +235,7 @@ function bootDaemon(path: string): Effect.Effect<BootedDaemon, unknown> {
     }
 
     const installedPlugins = yield* pluginRegistry.list();
+    const installedSkills = yield* skillRegistry.list();
     for (const plugin of installedPlugins) {
       if (plugin.status !== "enabled") {
         continue;
@@ -225,8 +253,10 @@ function bootDaemon(path: string): Effect.Effect<BootedDaemon, unknown> {
       config,
       configPath: path,
       pluginRegistry,
+      skillRegistry,
       startedPluginIds,
       installedPlugins: [...installedPlugins],
+      installedSkills: [...installedSkills],
     };
   })();
 }
@@ -258,7 +288,7 @@ function loadOrCreateConfig(path: string): Effect.Effect<DaemonConfig, unknown> 
 
 function loadManifest(path: string): Effect.Effect<PluginManifest, unknown> {
   return Effect.fn("daemon.loadManifest")(function* () {
-    const manifestPath = resolveFromRoot(path);
+    const manifestPath = resolveAssetPath(path);
     const text = yield* Effect.tryPromise({
       try: () => readFile(manifestPath, "utf8"),
       catch: (cause) => cause,
@@ -280,14 +310,26 @@ function loadManifest(path: string): Effect.Effect<PluginManifest, unknown> {
   })();
 }
 
+function loadSkillManifest(path: string): Effect.Effect<SkillManifest, unknown> {
+  return Effect.fn("daemon.loadSkillManifest")(function* () {
+    const manifestPath = resolveAssetPath(path);
+    const text = yield* Effect.tryPromise({
+      try: () => readFile(manifestPath, "utf8"),
+      catch: (cause) => cause,
+    });
+    return parseSkillManifest(JSON.parse(text));
+  })();
+}
+
 function seedPluginRegistryFromConfig(
   registry: JsonFilePluginRegistry,
+  skillRegistry: JsonFileSkillRegistry,
   config: DaemonConfig,
 ): Effect.Effect<void, unknown> {
   return Effect.fn("daemon.seedPluginRegistryFromConfig")(function* () {
     for (const plugin of config.plugins) {
       const manifest = yield* loadManifest(plugin.manifestPath);
-      const sourceRoot = dirname(resolveFromRoot(plugin.manifestPath));
+      const sourceRoot = dirname(resolveAssetPath(plugin.manifestPath));
       const source = {
         type: "local" as const,
         path: sourceRoot,
@@ -333,16 +375,107 @@ function seedPluginRegistryFromConfig(
       } else if (existing._tag === "Left") {
         yield* registry.disable(manifest.id);
       }
+      yield* installBundledSkills(skillRegistry, manifest, sourceRoot);
     }
   })();
+}
+
+function seedSkillRegistryFromConfig(
+  registry: JsonFileSkillRegistry,
+  config: DaemonConfig,
+): Effect.Effect<void, unknown> {
+  return Effect.fn("daemon.seedSkillRegistryFromConfig")(function* () {
+    for (const skill of config.skills) {
+      const manifest = yield* loadSkillManifest(skill.manifestPath);
+      const sourceRoot = dirname(resolveAssetPath(skill.manifestPath));
+      const source = {
+        type: "local" as const,
+        path: sourceRoot,
+      };
+      const existing = yield* Effect.either(registry.get(manifest.id));
+      const plan = createSkillInstallPlan(
+        source,
+        manifest,
+        existing._tag === "Right" ? existing.right : undefined,
+      );
+      if (existing._tag === "Left") {
+        yield* registry.install(plan);
+      } else if (JSON.stringify(existing.right.manifest) !== JSON.stringify(manifest)) {
+        yield* registry.upgrade(plan, "approved");
+      }
+      if (skill.enabled) {
+        yield* registry.enable(manifest.id);
+      } else if (existing._tag === "Left") {
+        yield* registry.disable(manifest.id);
+      }
+    }
+  })();
+}
+
+function installBundledSkills(
+  registry: JsonFileSkillRegistry,
+  plugin: PluginManifest,
+  pluginRoot: string,
+): Effect.Effect<void, unknown> {
+  return Effect.fn("daemon.installBundledSkills")(function* () {
+    const manifests = yield* discoverBundledSkillManifestPaths(plugin, pluginRoot);
+    for (const manifestPath of manifests) {
+      const manifest = yield* loadSkillManifest(manifestPath);
+      const source = {
+        type: "plugin" as const,
+        pluginId: plugin.id,
+        path: dirname(resolveAssetPath(manifestPath)),
+      };
+      const existing = yield* Effect.either(registry.get(manifest.id));
+      const plan = createSkillInstallPlan(
+        source,
+        manifest,
+        existing._tag === "Right" ? existing.right : undefined,
+      );
+      if (existing._tag === "Right") {
+        yield* registry.upgrade(plan, "approved");
+      } else {
+        yield* registry.install(plan);
+        yield* registry.disable(manifest.id);
+      }
+    }
+  })();
+}
+
+function discoverBundledSkillManifestPaths(
+  plugin: PluginManifest,
+  pluginRoot: string,
+): Effect.Effect<string[], unknown> {
+  return Effect.tryPromise(async () => {
+    const explicit = plugin.bundledSkills ?? [];
+    if (explicit.length > 0) {
+      return explicit.map((path) =>
+        isAbsolute(path) ? path : resolve(pluginRoot, path),
+      );
+    }
+    const skillsRoot = resolve(pluginRoot, "skills");
+    try {
+      const entries = await readdir(skillsRoot, { withFileTypes: true });
+      return entries
+        .flatMap((entry) =>
+          entry.isDirectory() ? [resolve(skillsRoot, entry.name, "skill.json")] : [],
+        )
+        .filter((path) => existsSync(path));
+    } catch (cause) {
+      if (isFileNotFound(cause)) {
+        return [];
+      }
+      throw cause;
+    }
+  });
 }
 
 function materializeInstalledManifest(record: InstalledPluginRecord): PluginManifest {
   const sourceRoot =
     record.source.type === "local"
-      ? resolveFromRoot(record.source.path)
+      ? resolveAssetPath(record.source.path)
       : record.source.type === "github" && record.source.checkoutPath
-        ? resolveFromRoot(record.source.checkoutPath)
+        ? resolveDataPath(record.source.checkoutPath)
         : repositoryRoot;
   return {
     ...record.manifest,
@@ -369,8 +502,12 @@ function relativizeEntry(entry: string, sourceRoot: string): string {
   return isAbsolute(relativeEntry) ? relativeEntry : `./${relativeEntry}`;
 }
 
-function resolveFromRoot(path: string): string {
+function resolveAssetPath(path: string): string {
   return isAbsolute(path) ? path : resolve(repositoryRoot, path);
+}
+
+function resolveDataPath(path: string): string {
+  return isAbsolute(path) ? path : resolve(dataRoot, path);
 }
 
 function findWorkspaceRoot(start: string): string | undefined {
@@ -386,6 +523,21 @@ function findWorkspaceRoot(start: string): string | undefined {
           return current;
         }
       } catch {}
+    }
+
+    const parent = dirname(current);
+    if (parent === current) {
+      return undefined;
+    }
+    current = parent;
+  }
+}
+
+function findReleaseRoot(start: string): string | undefined {
+  let current = resolve(start);
+  while (true) {
+    if (existsSync(resolve(current, "release.json"))) {
+      return current;
     }
 
     const parent = dirname(current);
@@ -414,6 +566,7 @@ function createDefaultConfig(): DaemonConfig {
   return {
     statePath: ".andy/state.json",
     pluginRegistryPath: ".andy/plugins.json",
+    skillRegistryPath: ".andy/skills.json",
     pluginInstallRoot: ".andy/github-plugins",
     policyPath: ".andy/policy.json",
     backgroundPollMs: 5_000,
@@ -425,8 +578,10 @@ function createDefaultConfig(): DaemonConfig {
       "memory.forget",
       "memory.list",
       "filesystem.read",
+      "filesystem.read_sensitive",
       "filesystem.write",
       "filesystem.delete",
+      "filesystem.read_sensitive",
       "shell.execute",
       "messaging.receive",
       "messaging.send",
@@ -459,6 +614,11 @@ function createDefaultConfig(): DaemonConfig {
       "swarm.cancel",
       "memory.embed",
       "memory.semantic_query",
+      "project.read",
+      "project.write",
+      "project.search",
+      "project.diff",
+      "project.run_check",
     ],
     approvalRequiredCapabilities: [
       "filesystem.write",
@@ -480,6 +640,8 @@ function createDefaultConfig(): DaemonConfig {
       "memory.save",
       "memory.save_fact",
       "memory.forget",
+      "project.write",
+      "project.run_check",
     ],
     plugins: [
       {
@@ -499,6 +661,11 @@ function createDefaultConfig(): DaemonConfig {
       { manifestPath: "plugins/swarm-orchestrator/plugin.json", enabled: false },
       { manifestPath: "plugins/memory-persistent/plugin.json", enabled: false },
       { manifestPath: "plugins/memory-semantic/plugin.json", enabled: false },
+      { manifestPath: "plugins/project/plugin.json", enabled: false },
+    ],
+    skills: [
+      { manifestPath: "skills/remember/skill.json", enabled: true },
+      { manifestPath: "skills/shell-note/skill.json", enabled: false },
     ],
     modelProviders: [
       {
@@ -507,6 +674,20 @@ function createDefaultConfig(): DaemonConfig {
         enabled: false,
         modelId: "gpt-4.1-mini",
         apiKeyEnv: "OPENAI_API_KEY",
+      },
+      {
+        id: "ai-sdk.anthropic.default",
+        provider: "ai-sdk.anthropic",
+        enabled: false,
+        modelId: "claude-3-5-sonnet-latest",
+        apiKeyEnv: "ANTHROPIC_API_KEY",
+      },
+      {
+        id: "ai-sdk.google.default",
+        provider: "ai-sdk.google",
+        enabled: false,
+        modelId: "gemini-2.0-flash",
+        apiKeyEnv: "GOOGLE_GENERATIVE_AI_API_KEY",
       },
     ],
     remoteControl: {
@@ -544,6 +725,10 @@ function parseConfig(value: unknown): DaemonConfig {
       typeof record.pluginRegistryPath === "string"
         ? record.pluginRegistryPath
         : ".andy/plugins.json",
+    skillRegistryPath:
+      typeof record.skillRegistryPath === "string"
+        ? record.skillRegistryPath
+        : ".andy/skills.json",
     pluginInstallRoot:
       typeof record.pluginInstallRoot === "string"
         ? record.pluginInstallRoot
@@ -563,6 +748,7 @@ function parseConfig(value: unknown): DaemonConfig {
       defaults.approvalRequiredCapabilities,
     ),
     plugins: mergePluginDefaults(record.plugins, defaults.plugins),
+    skills: mergeSkillDefaults(record.skills, defaults.skills),
     modelProviders: Array.isArray(record.modelProviders)
       ? record.modelProviders.flatMap(parseModelProviderConfig)
       : defaults.modelProviders,
@@ -589,6 +775,21 @@ function mergePluginDefaults(
   }
   for (const plugin of configured) {
     byPath.set(plugin.manifestPath, plugin);
+  }
+  return [...byPath.values()];
+}
+
+function mergeSkillDefaults(
+  value: unknown,
+  defaults: readonly DaemonSkillConfig[],
+): DaemonSkillConfig[] {
+  const configured = Array.isArray(value) ? value.flatMap(parseSkillConfig) : [];
+  const byPath = new Map<string, DaemonSkillConfig>();
+  for (const skill of defaults) {
+    byPath.set(skill.manifestPath, skill);
+  }
+  for (const skill of configured) {
+    byPath.set(skill.manifestPath, skill);
   }
   return [...byPath.values()];
 }
@@ -621,18 +822,39 @@ function parsePluginConfig(value: unknown): DaemonPluginConfig[] {
   ];
 }
 
+function parseSkillConfig(value: unknown): DaemonSkillConfig[] {
+  if (typeof value !== "object" || value === null) {
+    return [];
+  }
+  const record = value as Partial<DaemonSkillConfig>;
+  if (typeof record.manifestPath !== "string") {
+    return [];
+  }
+  return [
+    {
+      manifestPath: record.manifestPath,
+      enabled: record.enabled === true,
+    },
+  ];
+}
+
 function parseModelProviderConfig(value: unknown): DaemonModelProviderConfig[] {
   if (typeof value !== "object" || value === null) {
     return [];
   }
   const record = value as Partial<DaemonModelProviderConfig>;
-  if (record.provider !== "ai-sdk.openai" || typeof record.id !== "string") {
+  if (
+    (record.provider !== "ai-sdk.openai" &&
+      record.provider !== "ai-sdk.anthropic" &&
+      record.provider !== "ai-sdk.google") ||
+    typeof record.id !== "string"
+  ) {
     return [];
   }
   return [
     {
       id: record.id,
-      provider: "ai-sdk.openai",
+      provider: record.provider,
       enabled: record.enabled === true,
       modelId: typeof record.modelId === "string" ? record.modelId : "gpt-4.1-mini",
       ...(typeof record.apiKeyEnv === "string" ? { apiKeyEnv: record.apiKeyEnv } : {}),
@@ -650,10 +872,22 @@ function createModelProvider(config: DaemonModelProviderConfig) {
     config.apiKeyEnv && config.apiKeyEnv in process.env
       ? process.env[config.apiKeyEnv]
       : undefined;
-  return createAiSdkOpenAiModelProvider({
+  const common = {
     id: config.id,
     modelId: config.modelId,
     ...(apiKey ? { apiKey } : {}),
+  };
+  if (config.provider === "ai-sdk.anthropic") {
+    return createAiSdkAnthropicModelProvider({
+      ...common,
+      ...(config.baseURL ? { baseURL: config.baseURL } : {}),
+    });
+  }
+  if (config.provider === "ai-sdk.google") {
+    return createAiSdkGoogleModelProvider(common);
+  }
+  return createAiSdkOpenAiModelProvider({
+    ...common,
     ...(config.baseURL ? { baseURL: config.baseURL } : {}),
     ...(config.organization ? { organization: config.organization } : {}),
     ...(config.project ? { project: config.project } : {}),
@@ -665,6 +899,7 @@ function createStatus(booted: BootedDaemon) {
     status: "ready",
     configPath: booted.configPath,
     pluginRegistryPath: booted.config.pluginRegistryPath,
+    skillRegistryPath: booted.config.skillRegistryPath,
     pluginInstallRoot: booted.config.pluginInstallRoot,
     policyPath: booted.config.policyPath,
     pluginHosts: booted.services.lifecycle.health(),
@@ -677,6 +912,7 @@ function createStatus(booted: BootedDaemon) {
     })),
     plugins: booted.services.runtime.listPlugins(),
     tools: booted.services.runtime.listTools().map((tool) => tool.qualifiedName),
+    skills: booted.installedSkills.map(serializeInstalledSkill),
     modelProviders: booted.services.modelProviders.list().map((provider) => ({
       id: provider.id,
       pluginId: provider.pluginId,
@@ -935,6 +1171,10 @@ function handleHttpRequest(
 ): Effect.Effect<void, unknown> {
   return Effect.fn("daemon.handleHttpRequest")(function* () {
     const url = new URL(request.url ?? "/", "http://localhost");
+    if (request.method === "OPTIONS") {
+      writeJson(response, 204, {});
+      return;
+    }
     if (request.method === "GET" && url.pathname === "/health") {
       writeJson(response, 200, { status: "ok" });
       return;
@@ -956,10 +1196,82 @@ function handleHttpRequest(
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/skills") {
+      const skills = yield* booted.skillRegistry.list();
+      writeJson(response, 200, { skills: skills.map(serializeInstalledSkill) });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/agent/run") {
+      const body = yield* readJsonBody(request);
+      const result = yield* runAgentRequest(booted, body);
+      writeJson(response, 200, result);
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/plugins/install-local") {
       const body = yield* readJsonBody(request);
       const result = yield* installLocalPlugin(booted, body);
       writeJson(response, 200, result);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/plugins/review-local") {
+      const body = yield* readJsonBody(request);
+      const result = yield* reviewLocalPlugin(booted, body);
+      writeJson(response, 200, result);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/skills/install-local") {
+      const body = yield* readJsonBody(request);
+      const result = yield* installLocalSkill(booted, body);
+      writeJson(response, 200, result);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/skills/review-local") {
+      const body = yield* readJsonBody(request);
+      const result = yield* reviewLocalSkill(booted, body);
+      writeJson(response, 200, result);
+      return;
+    }
+
+    const skillActionMatch = url.pathname.match(
+      /^\/skills\/([^/]+)\/(enable|disable|remove)$/,
+    );
+    if (request.method === "POST" && skillActionMatch) {
+      const [, skillId, action] = skillActionMatch;
+      if (!skillId || !action) {
+        writeJson(response, 404, { error: "not_found" });
+        return;
+      }
+      const result = yield* mutateSkillLifecycle(booted, skillId, action);
+      writeJson(response, 200, result);
+      return;
+    }
+
+    const skillRunMatch = url.pathname.match(/^\/skills\/([^/]+)\/run$/);
+    if (request.method === "POST" && skillRunMatch) {
+      const [, skillId] = skillRunMatch;
+      if (!skillId) {
+        writeJson(response, 404, { error: "not_found" });
+        return;
+      }
+      const body = yield* readJsonBody(request);
+      const result = yield* Effect.either(runSkillWorkflow(booted, skillId, body));
+      if (result._tag === "Left") {
+        if (String(result.left).includes("ToolApprovalRequiredError")) {
+          yield* booted.services.saveState();
+          writeJson(response, 202, {
+            status: "approval_required",
+            approvals: booted.services.approvals.list(),
+          });
+          return;
+        }
+        return yield* Effect.fail(result.left);
+      }
+      writeJson(response, 200, result.right);
       return;
     }
 
@@ -1089,7 +1401,7 @@ function installLocalPlugin(
     }
     const enableAfterInstall = payload.enabled === true;
     const manifest = yield* loadManifest(manifestPath);
-    const sourceRoot = dirname(resolveFromRoot(manifestPath));
+    const sourceRoot = dirname(resolveAssetPath(manifestPath));
     const existing = yield* Effect.either(booted.pluginRegistry.get(manifest.id));
     const plan = createInstallPlan(
       { type: "local", path: sourceRoot },
@@ -1108,10 +1420,12 @@ function installLocalPlugin(
       existing._tag === "Right"
         ? yield* booted.pluginRegistry.upgrade(plan, "approved")
         : yield* booted.pluginRegistry.install(plan);
+    yield* installBundledSkills(booted.skillRegistry, manifest, sourceRoot);
     if (enableAfterInstall) {
       yield* mutatePluginLifecycle(booted, manifest.id, "enable");
     } else {
       yield* refreshInstalledPlugins(booted);
+      yield* refreshInstalledSkills(booted);
     }
     return {
       plugin: serializeInstalledPlugin(
@@ -1119,6 +1433,37 @@ function installLocalPlugin(
       ),
       plan: serializeInstallPlan(plan),
     };
+  })();
+}
+
+function reviewLocalPlugin(
+  booted: BootedDaemon,
+  body: JsonValue,
+): Effect.Effect<{ plan: ReturnType<typeof serializeInstallPlan> }, unknown> {
+  return Effect.fn("daemon.reviewLocalPlugin")(function* () {
+    const payload = isJsonObject(body) ? (body as { manifestPath?: unknown }) : {};
+    const manifestPath =
+      typeof payload.manifestPath === "string" ? payload.manifestPath : "";
+    if (!manifestPath) {
+      throw new Error("manifestPath is required.");
+    }
+    const manifest = yield* loadManifest(manifestPath);
+    const sourceRoot = dirname(resolveAssetPath(manifestPath));
+    const existing = yield* Effect.either(booted.pluginRegistry.get(manifest.id));
+    const plan = createInstallPlan(
+      { type: "local", path: sourceRoot },
+      {
+        ...manifest,
+        entry: relativizeEntry(manifest.entry, sourceRoot),
+        ...(manifest.binaryEntrypoint
+          ? {
+              binaryEntrypoint: relativizeEntry(manifest.binaryEntrypoint, sourceRoot),
+            }
+          : {}),
+      },
+      existing._tag === "Right" ? existing.right : undefined,
+    );
+    return { plan: serializeInstallPlan(plan) };
   })();
 }
 
@@ -1159,7 +1504,7 @@ function installGitHubPlugin(
       );
     }
 
-    const checkoutPath = resolveFromRoot(
+    const checkoutPath = resolveDataPath(
       `${booted.config.pluginInstallRoot}/${safePathSegment(repository)}/${safePathSegment(ref)}`,
     );
     yield* materializeGitCheckout({ repository, ref, checkoutPath });
@@ -1191,10 +1536,12 @@ function installGitHubPlugin(
       existing._tag === "Right"
         ? yield* booted.pluginRegistry.upgrade(plan, "approved")
         : yield* booted.pluginRegistry.install(plan);
+    yield* installBundledSkills(booted.skillRegistry, manifest, checkoutPath);
     if (enableAfterInstall) {
       yield* mutatePluginLifecycle(booted, manifest.id, "enable");
     } else {
       yield* refreshInstalledPlugins(booted);
+      yield* refreshInstalledSkills(booted);
       yield* booted.services.saveState();
     }
 
@@ -1206,6 +1553,282 @@ function installGitHubPlugin(
       checkoutPath,
     };
   })();
+}
+
+function installLocalSkill(
+  booted: BootedDaemon,
+  body: JsonValue,
+): Effect.Effect<
+  {
+    skill: ReturnType<typeof serializeInstalledSkill>;
+    plan: ReturnType<typeof serializeSkillInstallPlan>;
+  },
+  unknown
+> {
+  return Effect.fn("daemon.installLocalSkill")(function* () {
+    const payload = isJsonObject(body)
+      ? (body as { manifestPath?: unknown; enabled?: unknown })
+      : {};
+    const manifestPath =
+      typeof payload.manifestPath === "string" ? payload.manifestPath : "";
+    if (!manifestPath) {
+      throw new Error("manifestPath is required.");
+    }
+    const enableAfterInstall = payload.enabled === true;
+    const manifest = yield* loadSkillManifest(manifestPath);
+    const sourceRoot = dirname(resolveAssetPath(manifestPath));
+    const existing = yield* Effect.either(booted.skillRegistry.get(manifest.id));
+    const plan = createSkillInstallPlan(
+      { type: "local", path: sourceRoot },
+      manifest,
+      existing._tag === "Right" ? existing.right : undefined,
+    );
+    const installed =
+      existing._tag === "Right"
+        ? yield* booted.skillRegistry.upgrade(plan, "approved")
+        : yield* booted.skillRegistry.install(plan);
+    if (enableAfterInstall) {
+      yield* mutateSkillLifecycle(booted, manifest.id, "enable");
+    } else {
+      yield* refreshInstalledSkills(booted);
+      yield* booted.services.saveState();
+    }
+    return {
+      skill: serializeInstalledSkill(
+        enableAfterInstall ? yield* booted.skillRegistry.get(manifest.id) : installed,
+      ),
+      plan: serializeSkillInstallPlan(plan),
+    };
+  })();
+}
+
+function reviewLocalSkill(
+  booted: BootedDaemon,
+  body: JsonValue,
+): Effect.Effect<{ plan: ReturnType<typeof serializeSkillInstallPlan> }, unknown> {
+  return Effect.fn("daemon.reviewLocalSkill")(function* () {
+    const payload = isJsonObject(body) ? (body as { manifestPath?: unknown }) : {};
+    const manifestPath =
+      typeof payload.manifestPath === "string" ? payload.manifestPath : "";
+    if (!manifestPath) {
+      throw new Error("manifestPath is required.");
+    }
+    const manifest = yield* loadSkillManifest(manifestPath);
+    const existing = yield* Effect.either(booted.skillRegistry.get(manifest.id));
+    const plan = createSkillInstallPlan(
+      { type: "local", path: dirname(resolveAssetPath(manifestPath)) },
+      manifest,
+      existing._tag === "Right" ? existing.right : undefined,
+    );
+    return { plan: serializeSkillInstallPlan(plan) };
+  })();
+}
+
+function mutateSkillLifecycle(
+  booted: BootedDaemon,
+  skillId: string,
+  action: string,
+): Effect.Effect<{ skill: ReturnType<typeof serializeInstalledSkill> }, unknown> {
+  return Effect.fn("daemon.mutateSkillLifecycle")(function* () {
+    const record =
+      action === "enable"
+        ? yield* booted.skillRegistry.enable(skillId)
+        : action === "disable"
+          ? yield* booted.skillRegistry.disable(skillId)
+          : action === "remove"
+            ? yield* booted.skillRegistry.remove(skillId)
+            : undefined;
+    if (!record) {
+      throw new Error(`Unsupported skill action '${action}'.`);
+    }
+    yield* refreshInstalledSkills(booted);
+    yield* booted.services.saveState();
+    return { skill: serializeInstalledSkill(record) };
+  })();
+}
+
+function runSkillWorkflow(
+  booted: BootedDaemon,
+  skillId: string,
+  body: JsonValue,
+): Effect.Effect<
+  {
+    skillId: string;
+    workflow: string;
+    results: Array<{ stepId: string; toolName: string; output: JsonValue }>;
+  },
+  unknown
+> {
+  return Effect.fn("daemon.runSkillWorkflow")(function* () {
+    const payload = isJsonObject(body)
+      ? (body as { workflow?: unknown; input?: unknown })
+      : {};
+    const record = yield* booted.skillRegistry.get(skillId);
+    if (record.status !== "enabled") {
+      throw new Error(`Skill '${skillId}' is not enabled.`);
+    }
+    assertSkillRequirementsAvailable(booted, record);
+    const workflowName =
+      typeof payload.workflow === "string"
+        ? payload.workflow
+        : record.manifest.workflows[0]?.name;
+    const workflow = record.manifest.workflows.find(
+      (candidate) => candidate.name === workflowName,
+    );
+    if (!workflow) {
+      throw new Error(
+        `Skill '${skillId}' workflow '${String(workflowName)}' not found.`,
+      );
+    }
+    const input =
+      payload.input !== undefined && isJsonValue(payload.input) ? payload.input : {};
+    const results: Array<{ stepId: string; toolName: string; output: JsonValue }> = [];
+    const context: SkillRenderContext = {
+      input,
+      steps: new Map(),
+      vars: new Map(),
+    };
+
+    for (const step of workflow.steps) {
+      if (step.when && !readSkillCondition(step.when, context)) {
+        continue;
+      }
+      const eachValue = step.forEach ? readSkillPath(step.forEach, context) : undefined;
+      const items = Array.isArray(eachValue) ? eachValue : [undefined];
+      for (const item of items) {
+        if (item !== undefined) {
+          context.vars.set("item", item);
+        }
+        const renderedInput = renderSkillTemplate(step.input, context);
+        if (!isJsonObject(renderedInput)) {
+          throw new Error(
+            `Skill '${skillId}' step '${step.id}' did not render object input.`,
+          );
+        }
+        const result = yield* Effect.either(
+          booted.services.runtime.executeTool(step.toolName, renderedInput, {
+            taskId: `${skillId}:${workflow.name}:${step.id}`,
+          }),
+        );
+        if (result._tag === "Left") {
+          if (step.continueOnError) {
+            const errorOutput: JsonValue = { error: String(result.left) };
+            context.steps.set(step.id, errorOutput);
+            if (step.saveAs) {
+              context.vars.set(step.saveAs, errorOutput);
+            }
+            results.push({
+              stepId: step.id,
+              toolName: step.toolName,
+              output: errorOutput,
+            });
+            continue;
+          }
+          return yield* Effect.fail(result.left);
+        }
+        context.steps.set(step.id, result.right.output);
+        if (step.saveAs) {
+          context.vars.set(step.saveAs, result.right.output);
+        }
+        results.push({
+          stepId: step.id,
+          toolName: step.toolName,
+          output: result.right.output,
+        });
+      }
+      context.vars.delete("item");
+    }
+
+    yield* booted.services.saveState();
+    return { skillId, workflow: workflow.name, results };
+  })();
+}
+
+function runAgentRequest(
+  booted: BootedDaemon,
+  body: JsonValue,
+): Effect.Effect<{ response: string; sessionId: string }, unknown> {
+  return Effect.fn("daemon.runAgentRequest")(function* () {
+    const payload = isJsonObject(body)
+      ? (body as {
+          message?: unknown;
+          modelProviderId?: unknown;
+          systemPrompt?: unknown;
+          skillIds?: unknown;
+          sessionId?: unknown;
+        })
+      : {};
+    const message = typeof payload.message === "string" ? payload.message : "";
+    if (!message) {
+      throw new Error("message is required.");
+    }
+    const modelProviderId =
+      typeof payload.modelProviderId === "string"
+        ? payload.modelProviderId
+        : "ai-sdk.openai.default";
+    const skillIds = Array.isArray(payload.skillIds)
+      ? payload.skillIds.filter((item): item is string => typeof item === "string")
+      : [];
+    const runner = yield* booted.services.modelProviders.createRunner(modelProviderId);
+    const kernel = new AgentKernel({
+      runtime: booted.services.runtime,
+      llm: runner,
+      audit: booted.services.audit,
+      sessionStore: booted.services.sessions,
+    });
+    const result = yield* kernel.run({
+      userMessage: message,
+      ...(typeof payload.sessionId === "string"
+        ? { sessionId: payload.sessionId }
+        : {}),
+      ...(typeof payload.systemPrompt === "string"
+        ? { systemPrompt: payload.systemPrompt }
+        : {}),
+      ...(skillIds.length > 0
+        ? { skillInstructions: yield* buildSkillInstructions(booted, skillIds) }
+        : {}),
+    });
+    yield* booted.services.saveState();
+    return { response: result.response, sessionId: result.session.id };
+  })();
+}
+
+function buildSkillInstructions(
+  booted: BootedDaemon,
+  skillIds: readonly string[],
+): Effect.Effect<string, unknown> {
+  return Effect.fn("daemon.buildSkillInstructions")(function* () {
+    const sections: string[] = [];
+    for (const skillId of skillIds) {
+      const skill = yield* booted.skillRegistry.get(skillId);
+      if (skill.status !== "enabled") {
+        throw new Error(`Skill '${skillId}' is not enabled.`);
+      }
+      assertSkillRequirementsAvailable(booted, skill);
+      sections.push(formatSkillForPrompt(skill));
+    }
+    return `Use these installed Andy skills when relevant. Skills are declarative guidance; execute actions only through available tools.\n\n${sections.join("\n\n")}`;
+  })();
+}
+
+function formatSkillForPrompt(skill: InstalledSkillRecord): string {
+  const workflows = skill.manifest.workflows
+    .map(
+      (workflow) =>
+        `Workflow ${workflow.name}: ${workflow.description}\nSteps:\n${workflow.steps
+          .map((step) => `- ${step.id}: call ${step.toolName}`)
+          .join("\n")}`,
+    )
+    .join("\n");
+  return [
+    `Skill ${skill.manifest.id}: ${skill.manifest.name}`,
+    skill.manifest.description,
+    skill.manifest.instructions ?? "",
+    `Required capabilities: ${skill.manifest.requiredCapabilities.join(", ")}`,
+    workflows,
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function materializeGitCheckout(options: {
@@ -1254,16 +1877,20 @@ function mutatePluginLifecycle(
     } else if (action === "disable") {
       const record = yield* booted.pluginRegistry.disable(pluginId);
       yield* booted.services.lifecycle.stop(pluginId).pipe(Effect.ignore);
+      yield* disablePluginOwnedSkills(booted, pluginId);
       booted.startedPluginIds = booted.startedPluginIds.filter((id) => id !== pluginId);
       yield* refreshInstalledPlugins(booted);
+      yield* refreshInstalledSkills(booted);
       yield* booted.services.saveState();
       return { plugin: serializeInstalledPlugin(record) };
     } else if (action === "remove") {
       const record = yield* booted.pluginRegistry.remove(pluginId);
       yield* booted.services.lifecycle.stop(pluginId).pipe(Effect.ignore);
       yield* booted.services.runtime.removePlugin(pluginId).pipe(Effect.ignore);
+      yield* removePluginOwnedSkills(booted, pluginId);
       booted.startedPluginIds = booted.startedPluginIds.filter((id) => id !== pluginId);
       yield* refreshInstalledPlugins(booted);
+      yield* refreshInstalledSkills(booted);
       yield* booted.services.saveState();
       return { plugin: serializeInstalledPlugin(record) };
     } else {
@@ -1287,6 +1914,44 @@ function refreshInstalledPlugins(booted: BootedDaemon): Effect.Effect<void, unkn
   );
 }
 
+function refreshInstalledSkills(booted: BootedDaemon): Effect.Effect<void, unknown> {
+  return booted.skillRegistry.list().pipe(
+    Effect.flatMap((skills) =>
+      Effect.sync(() => {
+        booted.installedSkills = [...skills];
+      }),
+    ),
+  );
+}
+
+function disablePluginOwnedSkills(
+  booted: BootedDaemon,
+  pluginId: string,
+): Effect.Effect<void, unknown> {
+  return Effect.fn("daemon.disablePluginOwnedSkills")(function* () {
+    const skills = yield* booted.skillRegistry.list();
+    for (const skill of skills) {
+      if (skill.source.type === "plugin" && skill.source.pluginId === pluginId) {
+        yield* booted.skillRegistry.disable(skill.manifest.id);
+      }
+    }
+  })();
+}
+
+function removePluginOwnedSkills(
+  booted: BootedDaemon,
+  pluginId: string,
+): Effect.Effect<void, unknown> {
+  return Effect.fn("daemon.removePluginOwnedSkills")(function* () {
+    const skills = yield* booted.skillRegistry.list();
+    for (const skill of skills) {
+      if (skill.source.type === "plugin" && skill.source.pluginId === pluginId) {
+        yield* booted.skillRegistry.remove(skill.manifest.id);
+      }
+    }
+  })();
+}
+
 function serializeInstalledPlugin(plugin: InstalledPluginRecord) {
   return {
     pluginId: plugin.manifest.id,
@@ -1300,6 +1965,184 @@ function serializeInstalledPlugin(plugin: InstalledPluginRecord) {
     installedAt: plugin.installedAt,
     updatedAt: plugin.updatedAt,
   };
+}
+
+function serializeInstalledSkill(skill: InstalledSkillRecord) {
+  return {
+    skillId: skill.manifest.id,
+    name: skill.manifest.name,
+    version: skill.manifest.version,
+    description: skill.manifest.description,
+    status: skill.status,
+    risk: skill.manifest.risk,
+    source: skill.source,
+    requiredPlugins: skill.manifest.requiredPlugins,
+    requiredCapabilities: skill.manifest.requiredCapabilities,
+    workflows: skill.manifest.workflows.map((workflow) => ({
+      name: workflow.name,
+      description: workflow.description,
+      stepCount: workflow.steps.length,
+    })),
+    installedAt: skill.installedAt,
+    updatedAt: skill.updatedAt,
+  };
+}
+
+function serializeSkillInstallPlan(plan: SkillInstallPlan) {
+  return {
+    source: plan.source,
+    skillId: plan.manifest.id,
+    capabilityChanges: plan.capabilityChanges,
+    pluginChanges: plan.pluginChanges,
+    requiresApproval: plan.requiresApproval,
+  };
+}
+
+function assertSkillRequirementsAvailable(
+  booted: BootedDaemon,
+  skill: InstalledSkillRecord,
+): void {
+  const enabledPlugins = new Set(
+    booted.installedPlugins
+      .filter((plugin) => plugin.status === "enabled")
+      .map((plugin) => plugin.manifest.id),
+  );
+  for (const pluginId of skill.manifest.requiredPlugins) {
+    if (!enabledPlugins.has(pluginId)) {
+      throw new Error(
+        `Skill '${skill.manifest.id}' requires enabled plugin '${pluginId}'.`,
+      );
+    }
+  }
+
+  const availableCapabilities = new Set(
+    booted.installedPlugins
+      .filter((plugin) => plugin.status === "enabled")
+      .flatMap((plugin) => plugin.manifest.capabilities),
+  );
+  for (const capability of skill.manifest.requiredCapabilities) {
+    if (!availableCapabilities.has(capability)) {
+      throw new Error(
+        `Skill '${skill.manifest.id}' requires capability '${capability}'.`,
+      );
+    }
+  }
+}
+
+interface SkillRenderContext {
+  input: JsonValue;
+  steps: Map<string, JsonValue>;
+  vars: Map<string, JsonValue>;
+}
+
+function renderSkillTemplate(value: JsonValue, context: SkillRenderContext): JsonValue {
+  if (typeof value === "string") {
+    return renderSkillString(value, context);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => renderSkillTemplate(item, context));
+  }
+  if (isJsonObject(value)) {
+    const output: Record<string, JsonValue> = {};
+    for (const [key, item] of Object.entries(value)) {
+      const rendered = renderSkillTemplate(item, context);
+      if (rendered !== undefined) {
+        output[key] = rendered;
+      }
+    }
+    return output;
+  }
+  return value;
+}
+
+function renderSkillString(value: string, context: SkillRenderContext): JsonValue {
+  const exact = value.match(/^\{\{([^}]+)\}\}$/);
+  if (exact?.[1]) {
+    return readSkillPath(exact[1].trim(), context) ?? "";
+  }
+  return value.replace(/\{\{([^}]+)\}\}/g, (_match, expression: string) =>
+    stringifyTemplateValue(readSkillPath(expression.trim(), context)),
+  );
+}
+
+function readSkillPath(
+  path: string,
+  context: SkillRenderContext,
+): JsonValue | undefined {
+  if (path === "input") {
+    return context.input;
+  }
+  if (path === "item") {
+    return context.vars.get("item");
+  }
+  if (path.startsWith("input.")) {
+    return readPath(context.input, path.slice("input.".length));
+  }
+  if (path.startsWith("vars.")) {
+    const parts = path.slice("vars.".length).split(".");
+    const [name, ...rest] = parts;
+    if (!name) {
+      return undefined;
+    }
+    const value = context.vars.get(name);
+    return rest.length === 0 ? value : readPath(value, rest.join("."));
+  }
+  if (path.startsWith("item.")) {
+    return readPath(context.vars.get("item"), path.slice("item.".length));
+  }
+  if (path.startsWith("steps.")) {
+    const parts = path.slice("steps.".length).split(".");
+    const [stepId, ...rest] = parts;
+    if (!stepId) {
+      return undefined;
+    }
+    const output = context.steps.get(stepId);
+    if (rest[0] === "output") {
+      return rest.length === 1 ? output : readPath(output, rest.slice(1).join("."));
+    }
+  }
+  return undefined;
+}
+
+function readSkillCondition(expression: string, context: SkillRenderContext): boolean {
+  const value = readSkillPath(expression, context);
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    return value.length > 0 && value !== "false";
+  }
+  if (typeof value === "number") {
+    return value !== 0;
+  }
+  return value !== null && value !== undefined;
+}
+
+function readPath(value: JsonValue | undefined, path: string): JsonValue | undefined {
+  let current: JsonValue | undefined = value;
+  for (const part of path.split(".").filter(Boolean)) {
+    if (!isJsonObject(current)) {
+      return undefined;
+    }
+    current = current[part];
+  }
+  return current;
+}
+
+function stringifyTemplateValue(value: JsonValue | undefined): string {
+  if (value === undefined || value === null) {
+    return "";
+  }
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+function isFileNotFound(cause: unknown): boolean {
+  return (
+    typeof cause === "object" &&
+    cause !== null &&
+    "code" in cause &&
+    cause.code === "ENOENT"
+  );
 }
 
 function serializeInstallPlan(plan: ReturnType<typeof createInstallPlan>) {
@@ -1520,6 +2363,11 @@ function readJsonBody(request: IncomingMessage): Effect.Effect<JsonValue, unknow
 }
 
 function writeJson(response: ServerResponse, statusCode: number, body: unknown): void {
-  response.writeHead(statusCode, { "content-type": "application/json" });
+  response.writeHead(statusCode, {
+    "access-control-allow-headers": "content-type,x-andy-webhook-secret",
+    "access-control-allow-methods": "GET,POST,OPTIONS",
+    "access-control-allow-origin": "http://127.0.0.1:8790",
+    "content-type": "application/json",
+  });
   response.end(`${JSON.stringify(body)}\n`);
 }

@@ -54,7 +54,38 @@ bun build --compile --target=bun --outfile=../../dist/andy ./src/index.ts
 - Later release automation should produce per-platform binaries for macOS, Linux, and Windows.
 - First-party plugin packages include a source entrypoint for development and a `binaryEntrypoint` for release.
 - The subprocess host prefers `binaryEntrypoint` when the file exists and falls back to the source entrypoint with Bun for development.
-- A user-facing release should package `dist/andy`, `dist/andy-daemon`, first-party plugin manifests, and each plugin's compiled `dist/plugin` binary.
+- A user-facing release packages `dist/andy`, `dist/andy-daemon`, first-party plugin manifests, each plugin's compiled `dist/plugin` binary, bundled plugin skills, global first-party skills, and the built web console.
+
+## Release Package
+
+Create the local release bundle with:
+
+```bash
+bun run build:release
+```
+
+This runs the workspace build, compiles first-party plugin workers, compiles the CLI and daemon binaries, and writes a package under:
+
+```text
+dist/release/andy-<version>-<platform>-<arch>/
+```
+
+Package layout:
+
+```text
+bin/andy
+bin/andy-daemon
+plugins/<plugin>/plugin.json
+plugins/<plugin>/dist/plugin
+plugins/<plugin>/skills/**/skill.json
+skills/<skill>/skill.json
+web/index.html
+web/main.js
+web/styles.css
+release.json
+```
+
+`release.json` records the package platform, architecture, binaries, plugin manifests, plugin binary paths, bundled skills, and global skills. Release packaging fails if a required binary, plugin manifest, plugin worker binary, global skill manifest, or web asset is missing.
 
 ## CLI Operations
 
@@ -63,9 +94,14 @@ The compiled `dist/andy` binary can manage a running daemon:
 ```bash
 ./dist/andy status
 ./dist/andy plugin list
+./dist/andy plugin review-local plugins/memory-markdown/plugin.json
 ./dist/andy plugin install-local plugins/memory-markdown/plugin.json
 ./dist/andy plugin install-github https://github.com/owner/plugin.git v0.1.0
 ./dist/andy plugin enable andy.memory.markdown
+./dist/andy skill list
+./dist/andy skill review-local skills/remember/skill.json
+./dist/andy skill install-local skills/remember/skill.json --enable
+./dist/andy skill run andy.skills.remember --workflow save --input '{"key":"editor","value":"vim"}'
 ./dist/andy approval list
 ```
 
@@ -82,6 +118,7 @@ bun run build
 bun run build:binary
 bun run build:daemon-binary
 bun run build:plugin-binaries
+bun run package:release
 ./dist/andy "binary smoke"
 ./dist/andy-daemon --status
 ```

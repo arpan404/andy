@@ -1,0 +1,40 @@
+{
+  "schemaVersion": "1",
+  "id": "andy.skills.effect-ts-coding",
+  "name": "Effect TS Coding",
+  "version": "0.1.0",
+  "description": "Guide coding work toward Andy's Effect-first service, error, and validation patterns.",
+  "risk": "high",
+  "instructions": "Use Effect for async and fallible runtime code. Prefer Effect.gen, typed errors, small modules, explicit services, and validation at boundaries. Run typecheck and focused tests after edits.",
+  "requiredPlugins": ["andy.project"],
+  "requiredCapabilities": [
+    "project.read",
+    "project.write",
+    "project.search",
+    "project.run_check"
+  ],
+  "workflows": [
+    {
+      "name": "inspect-and-check",
+      "description": "Search the project and run a validation command.",
+      "steps": [
+        {
+          "id": "search-effect",
+          "toolName": "andy.project.project.search",
+          "input": { "query": "Effect.gen", "root": "{{input.root}}" },
+          "continueOnError": true,
+          "saveAs": "effectSearch"
+        },
+        {
+          "id": "run-check",
+          "toolName": "andy.project.project.run_check",
+          "input": {
+            "command": "bun",
+            "args": ["run", "typecheck"],
+            "cwd": "{{input.root}}"
+          }
+        }
+      ]
+    }
+  ]
+}

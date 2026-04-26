@@ -1,5 +1,5 @@
 {
-  "name": "@andy/model-ai-sdk",
+  "name": "@andy/skill-manager",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -16,13 +16,11 @@
     "check": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^3.0.71",
-    "@ai-sdk/google": "^3.0.64",
-    "@ai-sdk/openai": "^3.0.53",
-    "@andy/core": "workspace:*",
+    "@andy/skill-sdk": "workspace:*",
     "effect": "^3.21.2"
   },
   "devDependencies": {
+    "@types/node": "^25.0.0",
     "typescript": "^5.9.3"
   }
 }

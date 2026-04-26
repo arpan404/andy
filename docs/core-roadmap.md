@@ -9,6 +9,11 @@ Andy Core should stay small and trusted. It should provide the kernel, policy bo
 - Daemon app boots config, loads enabled plugin manifests through lifecycle, polls due background jobs, saves state, handles shutdown, and can be compiled with `bun run build:daemon-binary`.
 - AI SDK model provider package (`@andy/model-ai-sdk`) registers Vercel AI SDK models behind the core model-provider registry. Andy does not integrate with provider-native SDKs directly.
 - First-party system plugins now exist for Markdown memory, persistent memory, semantic memory, scoped filesystem access, approval-gated shell execution, Telegram, WhatsApp, voice input/output, vision, computer-control, background-worker, notifications, and swarm-orchestrator capability surfaces.
+- Skills now exist as declarative workflow packages with `@andy/skill-sdk`, `@andy/skill-manager`, daemon APIs, CLI commands, and local first-party skill manifests under `skills/`.
+- Plugin-bundled skills are discovered from plugin manifests or `skills/**/skill.json` and installed as plugin-owned skill records.
+- The project coding plugin provides scoped read/write/search/diff/run-check tools plus bundled Effect TS and React coding skills.
+- The local web console provides a first UI surface for daemon status, plugin/skill inventory, approvals, and skill runs.
+- Release packaging now assembles CLI, daemon, web assets, global skills, plugin manifests, plugin binaries, and plugin-bundled skills into `dist/release/andy-<version>-<platform>-<arch>/`.
 - Daemon remote control supports Telegram polling/webhook mode and WhatsApp webhook mode: inbound messages are normalized, published through the communication bridge, handled by an agent session using a configured AI SDK model provider, and replied to through the channel plugin.
 - Daemon HTTP ingress exposes health/status, approval list/decision endpoints, and Telegram/WhatsApp webhook endpoints with optional shared-secret verification.
 - Agent session kernel with AI SDK result types.
@@ -111,6 +116,7 @@ The daemon now hydrates and saves:
 
 - installed plugin records and lifecycle state through `@andy/plugin-manager`
 - GitHub plugin checkouts under `.andy/github-plugins` for immutable commit SHA or semver release tag installs
+- installed skill records through `.andy/skills.json`
 - agent sessions
 - approvals and restart-safe approval action descriptors
 - background jobs
@@ -148,7 +154,7 @@ Still needed: policy checks and app-specific backing stores.
 
 Core has an LLM runner interface and the first AI SDK OpenAI provider package. Future providers should stay as plugins or provider packages behind that interface and construct Vercel AI SDK `LanguageModel` instances.
 
-Needed providers still include Anthropic, Google, local models, and routing services.
+AI SDK provider adapters now include OpenAI, Anthropic, and Google. Needed providers still include local models and routing services.
 
 ### First-Party Plugin Depth
 
@@ -159,6 +165,7 @@ The first-party plugin packages are now real subprocess-hosted packages with man
 - Vision needs OCR and vision-model provider integration.
 - Computer control needs a richer accessibility adapter and cross-platform implementations.
 - Filesystem sensitive reads need a separate `filesystem.read_sensitive` tool and policy path.
+- Filesystem sensitive reads now have a separate `filesystem.read_sensitive` tool and critical capability path.
 - Notifications need native desktop and remote notification adapters beyond plugin-storage delivery records.
 - Swarm orchestration currently manages bounded swarm state; executing child agent sessions across the daemon remains the next provider-specific adapter.
 
@@ -215,6 +222,7 @@ The following remain plugins:
 - model providers
 - notifications
 - workflow packs and skills
+  Executable behavior for workflow packs and skills must stay declarative and plugin-backed. Skill manifests may describe tool workflows, but they must not introduce arbitrary code execution outside plugin manifests, policy, and audit.
 - swarm planning behavior
 
 Core may define stable interfaces for these areas, but feature behavior belongs behind plugin manifests, policy, and audit.
