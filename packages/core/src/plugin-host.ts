@@ -313,7 +313,7 @@ export interface SubprocessPluginHostOptions {
 
 export type HostedPluginHostApiHandler = (
   request: WorkerPluginHostApiRequest,
-) => Effect.Effect<JsonValue>;
+) => Effect.Effect<JsonValue, unknown>;
 
 export class SubprocessManifestPluginHost implements ManifestPluginHost {
   readonly #audit: AuditSink;
@@ -694,7 +694,7 @@ function executeHostedPluginHostApi(
   handler: HostedPluginHostApiHandler | undefined,
   manifest: PluginManifest,
   request: WorkerPluginHostApiRequest,
-): Effect.Effect<JsonValue> {
+): Effect.Effect<JsonValue, unknown> {
   if (request.pluginId !== manifest.id) {
     return Effect.succeed({
       denied: true,

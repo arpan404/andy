@@ -1,5 +1,6 @@
 import { Effect } from "effect";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { RealFileSystem, type AgentFileSystem } from "@andy/vfs";
@@ -149,6 +150,24 @@ export function buildSandboxedLaunchCommand(options: {
   })();
 }
 
+export function checkProcessIsolationAvailability(
+  profile: ProcessIsolationProfile,
+): Effect.Effect<boolean> {
+  return Effect.fn("checkProcessIsolationAvailability")(() =>
+    Effect.sync(() => {
+      if (profile.kind === "process-boundary") {
+        return true;
+      }
+
+      if (profile.kind === "macos-sandbox-exec") {
+        return commandExists("sandbox-exec");
+      }
+
+      return commandExists(profile.containerRuntime ?? "docker");
+    }),
+  )();
+}
+
 function createMacOsSandboxProfile(options: {
   allowNetwork: boolean;
   sandbox: PluginSandbox;
@@ -169,4 +188,11 @@ function createMacOsSandboxProfile(options: {
 
 function escapeSandboxPath(filePath: string): string {
   return filePath.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+}
+
+function commandExists(command: string): boolean {
+  const result = spawnSync(command, ["--version"], {
+    stdio: "ignore",
+  });
+  return result.status === 0 || result.signal === null;
 }

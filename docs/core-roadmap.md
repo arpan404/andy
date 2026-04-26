@@ -30,6 +30,11 @@ Andy Core should stay small and trusted. It should provide the kernel, policy bo
 - Subprocess launch profiles support process-boundary mode, macOS `sandbox-exec`, and container command generation.
 - Communication bridge routes user/agent messages and approval prompts through registered channel plugins such as WhatsApp and Telegram.
 - Worker and subprocess plugin RPC supports host API requests with manifest capability checks before forwarding to the host handler.
+- Approval resume engine can park approved tool actions and resume or deny them after the user decision.
+- Default hosted-plugin host API handler forwards sandboxed plugin syscall requests back through runtime tools.
+- Daemon service graph composes runtime, communication, approvals, approval resume, background, secrets, and hosted plugin host API handler.
+- Rule-based policy wrapper supports per-capability, per-plugin, per-user, per-channel, and risk-based policy rules.
+- JSON file secret broker provides an early durable secret-store scaffold with encoded values.
 - Background job scheduler with due-job lookup and status transitions.
 - Core state store contract with in-memory and JSON file implementations.
 - Cancellation token registry and timeout helper.
@@ -50,12 +55,12 @@ Streaming should not bypass policy or plugin execution rules.
 
 ### Approval Flow
 
-Core can create approval requests when policy returns `ask` and can route approval prompts through the communication bridge.
+Core can create approval requests when policy returns `ask`, route approval prompts through the communication bridge, and park/resume approved actions.
 
 Still needed:
 
-- pause or park the tool call
-- resume, deny, or expire the pending action
+- wire parked tool calls directly into `AgentRuntime.executeTool`
+- expire pending action
 - persist approvals across daemon restarts
 
 ### Plugin Host Isolation

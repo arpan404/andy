@@ -7,6 +7,7 @@ import { mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { buildAiSdkTools } from "./ai-tools.js";
+import { ApprovalResumeEngine, createApprovalToolResult } from "./approval-resume.js";
 import { ApprovalManager } from "./approvals.js";
 import { BackgroundJobScheduler } from "./background.js";
 import { CancellationRegistry, withTimeout } from "./cancellation.js";
@@ -16,6 +17,8 @@ import { AgentRuntime } from "./runtime.js";
 import { InMemorySecretBroker } from "./secrets.js";
 import { JsonFileCoreStateStore } from "./state.js";
 import { TraceManager } from "./tracing.js";
+import { DefaultHostedPluginHostApi } from "./host-api-handler.js";
+import { createAndyDaemon } from "./daemon.js";
 import {
   SubprocessManifestPluginHost,
   WorkerManifestPluginHost,
@@ -241,6 +244,29 @@ describe("core kernel services", () => {
     expect(communication.listMessages().at(-1)?.kind).toBe("approval");
   });
 
+  test("resumes parked approval actions after approval", async () => {
+    const approvals = new ApprovalManager({ audit: new ConsoleAuditSink() });
+    const resume = new ApprovalResumeEngine({ approvals });
+    const approval = await Effect.runPromise(
+      approvals.create({
+        runId: "run-approval",
+        toolName: "memory.save",
+        input: { key: "name" },
+        reason: "Memory write requires approval.",
+      }),
+    );
+    await Effect.runPromise(
+      resume.park(approval, () =>
+        Effect.succeed(createApprovalToolResult({ ok: true })),
+      ),
+    );
+
+    const result = await Effect.runPromise(resume.resumeApproved(approval.id));
+
+    expect(result.output).toEqual({ ok: true });
+    expect(resume.listParked()).toHaveLength(0);
+  });
+
   test("runs manifest-declared tools through a worker plugin host", async () => {
     const audit = new ConsoleAuditSink();
     const host = new WorkerManifestPluginHost({ audit });
@@ -339,6 +365,64 @@ describe("core kernel services", () => {
         },
       },
     });
+  });
+
+  test("default hosted plugin host API forwards through runtime tools", async () => {
+    const runtime = new AgentRuntime({
+      audit: new ConsoleAuditSink(),
+      policy: new CapabilityPolicy({
+        allowedCapabilities: new Set(["memory.save"]),
+      }),
+    });
+    Effect.runSync(
+      runtime.registerPlugin(
+        definePlugin({
+          id: "andy.memory.markdown",
+          name: "Markdown Memory",
+          version: "0.1.0",
+          capabilities: ["memory.save"],
+          tools: [
+            defineTool({
+              name: "memory.save",
+              description: "Save memory",
+              capabilities: ["memory.save"],
+              risk: "medium",
+              execute(input) {
+                return Effect.succeed({ saved: input });
+              },
+            }),
+          ],
+        }),
+      ),
+    );
+    const api = new DefaultHostedPluginHostApi({ runtime });
+
+    const output = await Effect.runPromise(
+      api.call({
+        type: "andy.host_api.call",
+        requestId: "host-api",
+        pluginId: "andy.test",
+        capability: "memory.save",
+        toolName: "memory.save",
+        input: { key: "city", value: "Paris" },
+      }),
+    );
+
+    expect(output).toEqual({ saved: { key: "city", value: "Paris" } });
+  });
+
+  test("creates daemon service graph", async () => {
+    const daemon = await Effect.runPromise(
+      createAndyDaemon({
+        audit: new ConsoleAuditSink(),
+        policy: new CapabilityPolicy({
+          allowedCapabilities: new Set(),
+        }),
+      }),
+    );
+
+    expect(daemon.runtime.listTools()).toEqual([]);
+    expect(daemon.communication.listMessages()).toEqual([]);
   });
 
   test("runs manifest-declared tools through a sandboxed subprocess host", async () => {

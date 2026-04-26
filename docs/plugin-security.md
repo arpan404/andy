@@ -121,7 +121,13 @@ Worker and subprocess plugins may request host APIs through the plugin RPC chann
 - the manifest declared the requested capability
 - a host API handler is configured
 
-The host API handler must still route through policy-gated runtime tools. This keeps sandboxed plugins from receiving direct core object references while still letting them request syscalls such as memory, filesystem, communication, secrets, background, or swarm.
+The default host API handler routes requests back through policy-gated runtime tools. This keeps sandboxed plugins from receiving direct core object references while still letting them request syscalls such as memory, filesystem, communication, secrets, background, or swarm.
+
+## Approval Resume
+
+Approval requests can be parked with the action they would run. After the user approves through a communication channel, the approval resume engine can execute the parked action and clear it. Denied approvals clear the parked action without running it.
+
+The current implementation provides the core engine. Runtime-level automatic parking and durable restart recovery still need daemon wiring.
 
 ## Upgrade Rule
 

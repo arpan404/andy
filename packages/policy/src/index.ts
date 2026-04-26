@@ -30,6 +30,17 @@ export interface CapabilityPolicyOptions {
   approvalRequiredChannels?: Set<string>;
 }
 
+export interface PolicyRule {
+  id: string;
+  effect: "allow" | "deny" | "ask";
+  reason: string;
+  capabilities?: ReadonlySet<string>;
+  pluginIds?: ReadonlySet<string>;
+  userIds?: ReadonlySet<string>;
+  channelIds?: ReadonlySet<string>;
+  risks?: ReadonlySet<string>;
+}
+
 export class CapabilityPolicy implements PolicyEngine {
   readonly #allowedCapabilities: Set<string>;
   readonly #approvalRequiredCapabilities: Set<string>;
@@ -81,4 +92,69 @@ export class CapabilityPolicy implements PolicyEngine {
 
     return { type: "allow" };
   }
+}
+
+export class RulePolicy implements PolicyEngine {
+  readonly #fallback: PolicyEngine;
+  readonly #rules: readonly PolicyRule[];
+
+  constructor(options: { fallback: PolicyEngine; rules: readonly PolicyRule[] }) {
+    this.#fallback = options.fallback;
+    this.#rules = options.rules;
+  }
+
+  decide(
+    tool: ToolDefinition,
+    input: JsonValue,
+    context: PolicyContext = {},
+  ): PolicyDecision {
+    for (const rule of this.#rules) {
+      if (matchesRule(rule, tool, context)) {
+        if (rule.effect === "allow") {
+          return { type: "allow" };
+        }
+
+        return {
+          type: rule.effect,
+          reason: rule.reason,
+        };
+      }
+    }
+
+    return this.#fallback.decide(tool, input, context);
+  }
+}
+
+function matchesRule(
+  rule: PolicyRule,
+  tool: ToolDefinition,
+  context: PolicyContext,
+): boolean {
+  if (
+    rule.capabilities &&
+    !tool.capabilities.some((capability) => rule.capabilities?.has(capability))
+  ) {
+    return false;
+  }
+
+  if (rule.pluginIds && (!context.pluginId || !rule.pluginIds.has(context.pluginId))) {
+    return false;
+  }
+
+  if (rule.userIds && (!context.userId || !rule.userIds.has(context.userId))) {
+    return false;
+  }
+
+  if (
+    rule.channelIds &&
+    (!context.channelId || !rule.channelIds.has(context.channelId))
+  ) {
+    return false;
+  }
+
+  if (rule.risks && (!context.risk || !rule.risks.has(context.risk))) {
+    return false;
+  }
+
+  return true;
 }

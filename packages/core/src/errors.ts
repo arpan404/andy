@@ -114,6 +114,15 @@ export class ApprovalAlreadyResolvedError extends Schema.TaggedError<ApprovalAlr
   },
 ) {}
 
+export class ApprovalDeniedError extends Schema.TaggedError<ApprovalDeniedError>()(
+  "ApprovalDeniedError",
+  {
+    approvalId: Schema.String,
+    status: Schema.String,
+    message: Schema.String,
+  },
+) {}
+
 export class CommunicationChannelNotFoundError extends Schema.TaggedError<CommunicationChannelNotFoundError>()(
   "CommunicationChannelNotFoundError",
   {
