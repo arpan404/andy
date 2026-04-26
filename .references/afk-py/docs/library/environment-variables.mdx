@@ -1,0 +1,106 @@
+---
+title: Environment Variables
+description: Environment variable reference for AFK defaults and backend configuration.
+---
+
+AFK is configured primarily through code. Environment variables provide fallback defaults for LLM settings, memory backends, queues, and prompt directories. **Runtime configuration APIs always take precedence.**
+
+<Note>
+  All variables are optional. If unset, AFK uses the defaults listed below.
+</Note>
+
+## LLM defaults
+
+These variables configure the default LLM provider and behavior. They are read by `LLMSettings.from_env()` at startup.
+
+| Variable                        | Default        | Description                                                  |
+| ------------------------------- | -------------- | ------------------------------------------------------------ |
+| `AFK_LLM_PROVIDER`              | `litellm`      | Default provider id (`openai`, `litellm`, `anthropic_agent`) |
+| `AFK_LLM_MODEL`                 | `gpt-5.2-mini` | Default model name                                           |
+| `AFK_EMBED_MODEL`               | _(none)_       | Embedding model for vector operations                        |
+| `AFK_LLM_API_BASE_URL`          | _(none)_       | Provider API base URL                                        |
+| `AFK_LLM_API_KEY`               | _(none)_       | Provider API key                                             |
+| `AFK_LLM_TIMEOUT_S`             | `30`           | Request timeout in seconds                                   |
+| `AFK_LLM_STREAM_IDLE_TIMEOUT_S` | `45`           | Stream idle timeout in seconds                               |
+| `AFK_LLM_MAX_RETRIES`           | `3`            | Retry attempts on transient failures                         |
+| `AFK_LLM_BACKOFF_BASE_S`        | `0.5`          | Exponential backoff base in seconds                          |
+| `AFK_LLM_BACKOFF_JITTER_S`      | `0.15`         | Random jitter added to backoff                               |
+| `AFK_LLM_JSON_MAX_RETRIES`      | `2`            | Structured output repair attempts                            |
+| `AFK_LLM_MAX_INPUT_CHARS`       | `200000`       | Input truncation ceiling in characters                       |
+
+<Tip>
+  **API keys for specific providers** (e.g. `OPENAI_API_KEY`,
+  `ANTHROPIC_API_KEY`) are read by the underlying provider libraries, not by AFK
+  directly. Set `AFK_LLM_API_KEY` only if you want a single key shared across
+  providers.
+</Tip>
+
+## Memory
+
+Configure the persistent memory backend for thread-based conversations.
+
+| Variable             | Default              | Description                                             |
+| -------------------- | -------------------- | ------------------------------------------------------- |
+| `AFK_MEMORY_BACKEND` | `sqlite`             | Backend type: `inmemory`, `sqlite`, `redis`, `postgres` |
+| `AFK_SQLITE_PATH`    | `afk_memory.sqlite3` | SQLite file path                                        |
+| `AFK_REDIS_URL`      | _(none)_             | Redis connection URL (e.g. `redis://localhost:6379`)    |
+| `AFK_PG_DSN`         | _(none)_             | PostgreSQL connection string                            |
+
+```python
+# Override in code — takes precedence over env vars
+from afk.core import Runner
+
+runner = Runner(memory_store=my_custom_store)
+```
+
+## Queue
+
+Configure the task queue backend for async agent execution.
+
+| Variable                           | Default    | Description                       |
+| ---------------------------------- | ---------- | --------------------------------- |
+| `AFK_QUEUE_BACKEND`                | `inmemory` | Backend type: `inmemory`, `redis` |
+| `AFK_QUEUE_RETRY_BACKOFF_BASE_S`   | `0.5`      | Retry base delay in seconds       |
+| `AFK_QUEUE_RETRY_BACKOFF_MAX_S`    | `30`       | Retry max delay in seconds        |
+| `AFK_QUEUE_RETRY_BACKOFF_JITTER_S` | `0.2`      | Random jitter added to backoff    |
+
+<Warning>
+  The `inmemory` queue backend does not persist across restarts. Use `redis` for
+  production workloads that need reliable task delivery.
+</Warning>
+
+## Prompts
+
+| Variable                | Default          | Description                            |
+| ----------------------- | ---------------- | -------------------------------------- |
+| `AFK_AGENT_PROMPTS_DIR` | `.agents/prompt` | Root directory for system prompt files |
+
+Agents resolve `instruction_file` paths relative to this directory. See [System Prompts](/library/system-prompts) for details.
+
+## A2A
+
+No default environment variables are required. Configure A2A host and authentication in code for an explicit security posture. See [A2A](/library/a2a) for details.
+
+## Precedence
+
+Configuration is resolved in this order (highest priority first):
+
+1. **Constructor arguments** — `Runner(memory_store=...)`, `Agent(model=...)`
+2. **`RunnerConfig` / `LLMSettings` objects** — passed to constructors
+3. **Environment variables** — fallback defaults listed on this page
+4. **Built-in defaults** — hardcoded in the source
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card
+    title="Configuration Reference"
+    icon="sliders"
+    href="/library/configuration-reference"
+  >
+    Full reference for all configurable fields across Agent, Runner, and more.
+  </Card>
+  <Card title="Core Runner" icon="play" href="/library/core-runner">
+    Runner lifecycle and configuration options.
+  </Card>
+</CardGroup>

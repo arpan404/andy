@@ -1,0 +1,48 @@
+---
+title: "01: Minimal Chat Agent"
+description: Smallest synchronous AFK agent run.
+---
+
+This is the simplest possible AFK agent. It demonstrates the three core concepts you need to get started: defining an `Agent` with a model and instructions, creating a `Runner` to execute it, and reading the result from `final_text`.
+
+If you are new to AFK, start here. Every other example builds on this foundation.
+
+```python
+from afk.agents import Agent
+from afk.core import Runner
+
+agent = Agent(name="chat", model="gpt-5.2-mini", instructions="Answer directly with concrete detail.")
+runner = Runner()
+result = runner.run_sync(agent, user_message="Define error budget in SRE.")
+print(result.final_text)
+```
+
+## Line-by-line explanation
+
+**`Agent(...)`** defines the agent's identity and behavior. The `name` is used for telemetry and logging. The `model` specifies which LLM to use. The `instructions` become the system prompt that guides the model's behavior.
+
+**`Runner()`** creates the execution engine. With no arguments, it uses in-memory defaults: headless interaction mode, no telemetry sink, and no policy engine. This is the fastest way to get started during development.
+
+**`runner.run_sync(...)`** executes the agent synchronously, blocking until the run completes. Under the hood, this creates an async event loop, runs the agent through the full lifecycle (LLM call, optional tool execution, optional subagent delegation), and returns the terminal `AgentResult`. The `user_message` is the initial prompt sent to the model.
+
+**`result.final_text`** contains the model's final text response. This is the primary output field on `AgentResult`. Always use `final_text` (not `output_text`) to access the agent's response.
+
+## What AgentResult contains
+
+The `AgentResult` dataclass returned by `run_sync` includes:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `final_text` | `str` | The agent's final text response. |
+| `state` | `str` | Terminal state: `"completed"`, `"failed"`, `"cancelled"`, or `"degraded"`. |
+| `run_id` | `str` | Unique identifier for this run. |
+| `thread_id` | `str` | Thread identifier for memory continuity across runs. |
+| `tool_executions` | `list` | Records of all tool calls made during the run. |
+| `subagent_executions` | `list` | Records of all subagent invocations. |
+| `usage` | `UsageAggregate` | Token usage and cost estimates across all LLM calls. |
+
+## Expected behavior
+
+When you run this example, the runner makes a single LLM call to `gpt-5.2-mini` with the system instructions and user message. Since no tools are registered, the model responds with text only. The run completes in one step with `state="completed"`, and `final_text` contains a concise definition of error budgets in SRE.
+
+No network calls, API keys, or external services are required beyond access to the specified LLM provider (configured via environment variables like `OPENAI_API_KEY`).

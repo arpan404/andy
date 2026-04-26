@@ -1,0 +1,144 @@
+---
+title: Getting Started
+description: Scenario-based examples for every major AFK feature.
+---
+
+This catalog provides runnable code examples for every major AFK capability. Each example is self-contained and demonstrates a specific pattern -- from the simplest possible agent run to advanced tool security configurations.
+
+The examples are ordered by complexity. If you are new to AFK, start at the top and work your way down. Each example builds on concepts introduced in the previous ones.
+
+## Which example should I start with?
+
+- **First time using AFK?** Start with [Minimal Chat Agent](/library/snippets/01_minimal_chat_agent). It shows the absolute simplest agent run in under 10 lines of code.
+- **Need to gate dangerous actions?** Go to [Policy + HITL](/library/snippets/02_policy_with_hitl). It demonstrates how policy engines and human approval work together.
+- **Building a multi-agent system?** See [Subagent Router](/library/snippets/03_subagents_with_router). It shows how to delegate work to specialist subagents and merge results.
+- **Need to persist and resume runs?** Check [Resume + Compact](/library/snippets/04_resume_and_compact). It covers checkpoint-based resumption and memory compaction.
+- **Using LLMs without the agent loop?** See [Structured Output](/library/snippets/05_direct_llm_structured_output). It shows how to use `LLMBuilder` directly with Pydantic models.
+- **Locking down tool capabilities?** Go to [Tool Security](/library/snippets/06_tool_registry_security). It demonstrates scoped tool registration and policy gates.
+
+## Complexity progression
+
+| Level        | Example              | What You Learn                                             |
+| ------------ | -------------------- | ---------------------------------------------------------- |
+| Beginner     | Minimal Chat Agent   | Agent + Runner basics, `final_text` access                 |
+| Beginner     | Structured Output    | Direct LLM usage, Pydantic schema validation               |
+| Intermediate | Policy + HITL        | Policy engine, approval flows, interaction modes           |
+| Intermediate | Tool Security        | Tool scoping, sandbox profiles, policy gates               |
+| Intermediate | Hooks + Middleware   | Pre/post tool execution hooks, middleware chains           |
+| Intermediate | Runtime Tools        | Built-in file, search, and command tools                   |
+| Intermediate | Prompt Loader        | External prompt files, template variables                  |
+| Advanced     | Subagent Router      | Multi-agent coordination, delegation patterns              |
+| Advanced     | Resume + Compact     | Checkpointing, memory management, long-running workflows   |
+| Intermediate | Streaming + Memory   | Real-time streaming with multi-turn thread persistence     |
+| Intermediate | Cost Monitoring      | Budget limits, real-time cost tracking, batch budgets      |
+| Advanced     | MCP Client           | Connect to external MCP servers, hybrid local+remote tools |
+| Advanced     | Multi-Model Fallback | Fallback chains, circuit breakers, model tier strategies   |
+
+## Scenario catalog
+
+<CardGroup cols={2}>
+  <Card
+    title="Minimal Chat Agent"
+    href="/library/snippets/01_minimal_chat_agent"
+    icon="message-square"
+  >
+    The simplest possible AFK agent. Define an agent, run it synchronously, and
+    read the output. Start here.
+  </Card>
+  <Card
+    title="Policy + HITL"
+    href="/library/snippets/02_policy_with_hitl"
+    icon="shield"
+  >
+    Gate sensitive actions through a policy engine and route approval requests
+    to a human operator.
+  </Card>
+  <Card
+    title="Subagent Router"
+    href="/library/snippets/03_subagents_with_router"
+    icon="git-branch"
+  >
+    Delegate workload to specialist subagents using a coordinator pattern. Merge
+    outputs into a unified response.
+  </Card>
+  <Card
+    title="Resume + Compact"
+    href="/library/snippets/04_resume_and_compact"
+    icon="database"
+  >
+    Checkpoint a run, resume it later from the last known state, and compact
+    memory to control storage growth.
+  </Card>
+  <Card
+    title="Structured Output"
+    href="/library/snippets/05_direct_llm_structured_output"
+    icon="braces"
+  >
+    Use the LLM builder directly (without the agent loop) to get
+    schema-validated structured responses via Pydantic.
+  </Card>
+  <Card
+    title="Tool Security"
+    href="/library/snippets/06_tool_registry_security"
+    icon="lock"
+  >
+    Register destructive tools with tight scoping, enforce sandbox profiles, and
+    gate actions through policy.
+  </Card>
+  <Card
+    title="Hooks + Middleware"
+    href="/library/snippets/07_tool_hooks_and_middleware"
+    icon="layers"
+  >
+    Attach pre-execution and post-execution hooks to tools. Chain middleware for
+    logging, validation, and transformation.
+  </Card>
+  <Card
+    title="Runtime Tools"
+    href="/library/snippets/08_prebuilt_runtime_tools"
+    icon="wrench"
+  >
+    Use AFK's built-in file reading, directory listing, and command execution
+    tools with agents.
+  </Card>
+  <Card
+    title="Prompt Loader"
+    href="/library/snippets/09_system_prompt_loader"
+    icon="file-text"
+  >
+    Load system prompts from external files with template variable substitution
+    and automatic caching.
+  </Card>
+  <Card
+    title="Streaming + Memory"
+    href="/library/snippets/10_streaming_chat_with_memory"
+    icon="radio"
+  >
+    Combine real-time streaming with thread-based memory for multi-turn chat
+    UIs.
+  </Card>
+  <Card
+    title="Cost Monitoring"
+    href="/library/snippets/11_cost_monitoring"
+    icon="dollar-sign"
+  >
+    Track and control agent costs using FailSafeConfig budgets and telemetry
+    events.
+  </Card>
+  <Card
+    title="MCP Client"
+    href="/library/snippets/12_mcp_client_integration"
+    icon="plug"
+  >
+    Connect to external MCP servers, discover tools, and combine with local
+    tools.
+  </Card>
+  <Card
+    title="Multi-Model Fallback"
+    href="/library/snippets/13_multi_model_fallback"
+    icon="refresh-cw"
+  >
+    Configure fallback model chains for LLM resilience, circuit breakers, and
+    cost optimization.
+  </Card>
+</CardGroup>

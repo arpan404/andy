@@ -1,0 +1,169 @@
+---
+title: "08: Prebuilt Runtime Tools"
+description: Use AFK's built-in filesystem tools with directory-scoped security constraints and compose them with policy checks.
+---
+
+## What this snippet demonstrates
+
+AFK ships prebuilt tools for common runtime operations like listing directories and reading files. These tools are designed with security-first defaults: every tool is scoped to an explicit root directory that prevents directory traversal attacks. This snippet shows how to create, configure, and compose prebuilt tools with agents and policy guards.
+
+## Building runtime tools
+
+The `build_runtime_tools()` factory creates a set of filesystem tools bound to a specific root directory. All path operations within these tools are resolved against this root, and any attempt to access files outside it raises a `FileAccessError`.
+
+```python
+from pathlib import Path
+from afk.agents import Agent
+from afk.core import Runner, RunnerConfig
+from afk.tools.prebuilts.runtime import build_runtime_tools
+
+# Create filesystem tools scoped to a specific directory
+runtime_tools = build_runtime_tools(root_dir=Path("./workspace"))
+
+agent = Agent(
+    name="file-assistant",
+    model="gpt-5.2-mini",
+    instructions=(
+        "You help users explore and read files in the workspace directory. "
+        "Use list_directory to browse the directory structure and read_file "
+        "to read file contents. You cannot access files outside the workspace."
+    ),
+    tools=runtime_tools,
+)
+
+runner = Runner(config=RunnerConfig(interaction_mode="headless"))
+result = runner.run_sync(agent, user_message="What files are in the workspace?")
+print(result.final_text)
+```
+
+## Available prebuilt tools
+
+The `build_runtime_tools()` factory produces two tools:
+
+### list_directory
+
+Lists entries in a directory under the configured root. Returns entry names, paths, and type flags (file or directory).
+
+| Parameter     | Type  | Default | Description                                                       |
+| ------------- | ----- | ------- | ----------------------------------------------------------------- |
+| `path`        | `str` | `"."`   | Relative path to list, resolved against the root directory.       |
+| `max_entries` | `int` | `200`   | Maximum entries to return (1--5000). Prevents unbounded listings. |
+
+**Returns:** A dictionary with `root`, `path`, and `entries` (list of `{name, path, is_dir, is_file}`).
+
+### read_file
+
+Reads the contents of a file under the configured root, with configurable truncation to prevent excessive token consumption.
+
+| Parameter   | Type  | Default    | Description                                                                      |
+| ----------- | ----- | ---------- | -------------------------------------------------------------------------------- |
+| `path`      | `str` | (required) | Relative path to the file, resolved against the root directory.                  |
+| `max_chars` | `int` | `20_000`   | Maximum characters to read (1--500,000). Content is truncated beyond this limit. |
+
+**Returns:** A dictionary with `root`, `path`, `content`, and `truncated` (boolean indicating whether content was truncated).
+
+## Security: directory traversal prevention
+
+Every path operation is validated with an internal containment check that uses Python's `Path.relative_to()` to verify that the resolved path stays within the configured root. This prevents attacks like:
+
+```
+../../etc/passwd           # Blocked: escapes root
+/absolute/path/to/secrets  # Blocked: escapes root
+./workspace/../../../etc   # Blocked: resolved path escapes root
+```
+
+If a path escapes the root, the tool raises `FileAccessError` immediately, before any file I/O occurs.
+
+## Composing with policy checks
+
+For additional security, pair runtime tools with a policy engine that gates specific operations on approval:
+
+```python
+from afk.agents import Agent, PolicyEngine, PolicyRule
+
+# Define a policy that requires approval for reading certain files
+policy = PolicyEngine(
+    rules=[
+        PolicyRule(
+            tool_name="read_file",
+            description="Require approval for reading config files",
+            condition=lambda event: ".env" in event.tool_args.get("path", "")
+                or "config" in event.tool_args.get("path", ""),
+            action="request_approval",
+            approval_message="Agent wants to read a config file: {path}",
+        ),
+    ]
+)
+
+agent = Agent(
+    name="ops-assistant",
+    model="gpt-5.2-mini",
+    instructions="Use approved runtime tools only. Never read sensitive configuration without approval.",
+    tools=build_runtime_tools(root_dir=Path("./project")),
+)
+
+runner = Runner(
+    policy_engine=policy,
+    config=RunnerConfig(interaction_mode="headless"),
+)
+```
+
+## Composing with custom tools
+
+You can combine prebuilt tools with your own custom tools in a single agent:
+
+```python
+from pydantic import BaseModel
+from afk.tools import tool
+
+
+class GrepArgs(BaseModel):
+    pattern: str
+    path: str = "."
+
+
+@tool(
+    args_model=GrepArgs,
+    name="grep_files",
+    description="Search for a pattern in files within the workspace.",
+)
+async def grep_files(args: GrepArgs) -> dict:
+    # Your custom search implementation
+    return {"matches": [], "pattern": args.pattern}
+
+
+# Combine prebuilt + custom tools
+all_tools = build_runtime_tools(root_dir=Path("./workspace")) + [grep_files]
+
+agent = Agent(
+    name="dev-assistant",
+    model="gpt-5.2-mini",
+    instructions="Help developers explore and search the codebase.",
+    tools=all_tools,
+)
+```
+
+## Command allowlists and sandbox profiles
+
+For production environments, restrict tool capabilities further using sandbox profiles:
+
+```python
+from afk.tools.security import SandboxProfile
+
+# Create a read-only sandbox that restricts what operations tools can perform
+read_only_profile = SandboxProfile(
+    name="read_only",
+    allowed_operations=["read", "list"],
+    denied_operations=["write", "delete", "execute"],
+    max_file_size_bytes=1_000_000,        # 1 MB max read size
+    allowed_extensions=[".py", ".md", ".txt", ".json", ".yaml"],
+)
+```
+
+This ensures that even if the LLM attempts to use tools for unauthorized operations, the sandbox profile blocks execution before any I/O occurs.
+
+## What to read next
+
+- [Tools](/library/tools) -- Full tool system architecture, including the `@tool` decorator, `ToolResult`, and execution pipeline.
+- [Snippet 06: Tool Registry Security](/library/snippets/06_tool_registry_security) -- Security scoping, policy gates, and sandbox profiles in detail.
+- [Security Model](/library/security-model) -- Threat model, defense layers, and RunnerConfig security fields.

@@ -1,0 +1,140 @@
+---
+title: "06: Tool Registry Security"
+description: Safe tool registration and guardrail practices.
+---
+
+Tools are the primary way agents interact with external systems. A tool that reads data is fundamentally different from a tool that deletes resources -- and your security model should reflect this. AFK provides multiple layers of defense for tool security: scoped tool definitions with typed arguments, sandbox profiles that restrict execution capabilities, and policy gates that require human approval for destructive operations.
+
+This page demonstrates how to register tools safely, distinguish between read-only and mutating tools, and configure policy gates to protect against unintended destructive actions.
+
+## Read-only vs mutating tools
+
+The most important security distinction is between tools that observe (read-only) and tools that act (mutating). Read-only tools are generally safe to allow broadly. Mutating tools should be tightly scoped and policy-gated.
+
+```python
+from pydantic import BaseModel
+from afk.tools import tool, ToolResult
+
+# --- Read-only tool: safe, broadly permitted ---
+class LookupArgs(BaseModel):
+    resource_id: str
+
+@tool(
+    args_model=LookupArgs,
+    name="get_resource",
+    description="Look up a resource by ID. Returns resource metadata. Read-only.",
+)
+def get_resource(args: LookupArgs) -> dict:
+    return {"id": args.resource_id, "status": "active", "region": "us-east-1"}
+
+
+# --- Mutating tool: destructive, requires policy gate ---
+class DeleteArgs(BaseModel):
+    resource_id: str
+
+@tool(
+    args_model=DeleteArgs,
+    name="delete_resource",
+    description="Permanently delete a resource by ID. This action is irreversible.",
+)
+def delete_resource(args: DeleteArgs) -> dict:
+    # In production: call your API to delete the resource
+    return {"deleted": args.resource_id}
+```
+
+Notice the differences:
+- The read-only tool (`get_resource`) has a description that explicitly says "Read-only." This signals to both the model and human reviewers that the tool is safe.
+- The mutating tool (`delete_resource`) has a description warning about irreversibility. This helps the model understand the severity, and helps policy rules identify destructive operations.
+
+## Policy gate setup
+
+Use a `PolicyEngine` to require human approval before any mutating tool executes:
+
+```python
+from afk.agents import Agent, PolicyEngine, PolicyRule, FailSafeConfig
+from afk.core import Runner, RunnerConfig
+
+# Define policy rules that distinguish read vs write operations
+policy = PolicyEngine(rules=[
+    PolicyRule(
+        rule_id="gate-delete",
+        description="Require approval for delete operations",
+        condition=lambda event: event.tool_name == "delete_resource",
+        action="request_approval",
+        reason="Delete operations are irreversible and require human approval.",
+    ),
+    PolicyRule(
+        rule_id="deny-unknown-tools",
+        description="Deny any tool not explicitly registered",
+        condition=lambda event: (
+            event.tool_name is not None
+            and event.tool_name not in {"get_resource", "delete_resource"}
+        ),
+        action="deny",
+        reason="Unregistered tools are not permitted.",
+    ),
+])
+
+agent = Agent(
+    name="resource-manager",
+    model="gpt-5.2-mini",
+    instructions="Manage resources using the available tools. Always look up a resource before modifying it.",
+    tools=[get_resource, delete_resource],
+    fail_safe=FailSafeConfig(
+        max_tool_calls=10,
+        max_total_cost_usd=0.10,
+    ),
+)
+
+runner = Runner(
+    policy_engine=policy,
+    config=RunnerConfig(
+        interaction_mode="headless",
+        approval_fallback="deny",     # Auto-deny destructive actions in headless mode
+        sanitize_tool_output=True,    # Wrap tool output in untrusted-data markers
+    ),
+)
+
+result = runner.run_sync(agent, user_message="Delete resource res-123")
+print(f"State: {result.state}")
+# In headless mode, the delete is auto-denied. The model sees the denial and responds accordingly.
+```
+
+## Sandbox profiles for filesystem tools
+
+For tools that interact with the filesystem or execute commands, use `SandboxProfile` to restrict their capabilities:
+
+```python
+from afk.tools.security import SandboxProfile
+from afk.core import RunnerConfig
+
+config = RunnerConfig(
+    default_sandbox_profile=SandboxProfile(
+        profile_id="restricted",
+        allow_network=False,                    # Block network access
+        allow_command_execution=True,           # Allow shell commands
+        allowed_command_prefixes=["ls", "cat"], # Only safe read commands
+        deny_shell_operators=True,              # Block pipes, redirects, semicolons
+        allowed_paths=["/app/data"],            # Restrict file access to data directory
+        denied_paths=["/etc", "/root"],         # Explicitly deny sensitive paths
+        command_timeout_s=10.0,                 # Kill commands after 10 seconds
+        max_output_chars=5_000,                 # Truncate large outputs
+    ),
+)
+```
+
+## Scoping destructive tools
+
+Follow these principles when registering destructive tools:
+
+1. **Name them clearly.** Use verb prefixes that signal intent: `delete_`, `remove_`, `drop_`, `update_`, `modify_`. This makes policy rules easy to write and audit.
+
+2. **Type all arguments.** Use Pydantic models for argument validation. Never accept freeform `dict` arguments for mutating operations.
+
+3. **Describe irreversibility.** Include "irreversible", "destructive", or "permanent" in the tool description. This helps both the model and policy reviewers understand the risk.
+
+4. **Gate with policy rules.** Every mutating tool should have a corresponding policy rule. Use `request_approval` for interactive environments and `deny` as the fallback in headless mode.
+
+5. **Set cost limits.** Use `FailSafeConfig.max_tool_calls` and `max_total_cost_usd` to prevent runaway tool usage, especially when the agent has access to APIs with per-call costs.
+
+6. **Audit everything.** Policy decisions are emitted as `policy_decision` events in the run event stream. Persist these events for compliance and debugging.

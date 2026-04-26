@@ -1,0 +1,149 @@
+---
+title: "11: Cost Monitoring"
+description: Track and control agent costs using FailSafeConfig budgets and telemetry events.
+---
+
+## What this snippet demonstrates
+
+Runaway agent loops are the most common source of unexpected API costs. AFK provides two defense layers: **cost budgets** that kill runs when spending exceeds a threshold, and **telemetry events** that let you observe cost in real time. This snippet shows how to configure both.
+
+## Setting cost budgets
+
+The simplest defense is a hard cost ceiling on every agent:
+
+```python
+from afk.agents import Agent, FailSafeConfig
+
+agent = Agent(
+    name="budget-agent",
+    model="gpt-5.2-mini",
+    instructions="Be helpful and concise.",
+    fail_safe=FailSafeConfig(
+        max_total_cost_usd=0.50,        # Hard cost ceiling
+        max_llm_calls=30,               # Secondary defense: limit API calls
+        max_steps=15,                    # Tertiary defense: limit reasoning steps
+        max_wall_time_s=120.0,          # Quaternary defense: wall-clock timeout
+    ),
+)
+```
+
+When the estimated cost exceeds `max_total_cost_usd`, the runner terminates the run with a `degraded` state and returns the best partial result.
+
+## Monitoring cost from results
+
+Every `AgentResult` includes token counts and cost estimates:
+
+```python
+from afk.core import Runner
+
+runner = Runner()
+result = runner.run_sync(agent, user_message="Analyze this dataset...")
+
+# Access usage statistics
+usage = result.usage
+print(f"Input tokens:  {usage.input_tokens}")
+print(f"Output tokens: {usage.output_tokens}")
+print(f"Total tokens:  {usage.total_tokens}")
+print(f"Estimated cost: ${usage.estimated_cost_usd:.4f}")
+print(f"LLM calls:     {usage.llm_call_count}")
+print(f"Tool calls:    {len(result.tool_executions)}")
+```
+
+## Real-time cost monitoring via streaming
+
+For long-running agents, monitor cost during execution:
+
+```python
+import asyncio
+from afk.agents import Agent, FailSafeConfig
+from afk.core import Runner
+
+agent = Agent(
+    name="analyst",
+    model="gpt-5.2",
+    instructions="Provide detailed analysis.",
+    fail_safe=FailSafeConfig(
+        max_total_cost_usd=1.00,
+        max_steps=20,
+    ),
+)
+
+
+async def monitor_cost():
+    runner = Runner()
+    handle = await runner.run_stream(
+        agent, user_message="Provide a comprehensive analysis of Python async patterns"
+    )
+
+    step_count = 0
+    async for event in handle:
+        match event.type:
+            case "text_delta":
+                print(event.text_delta, end="", flush=True)
+            case "step_started" if event.step is not None:
+                step_count = event.step
+            case "tool_completed":
+                print(f"\n  [STEP] Step {step_count} | Tool: {event.tool_name}")
+            case "completed" if event.result is not None:
+                usage = event.result.usage
+                print(f"\n\n--- Cost Summary ---")
+                print(f"State:    {event.result.state}")
+                print(f"Tokens:   {usage.total_tokens}")
+                print(f"Cost:     ${usage.estimated_cost_usd:.4f}")
+                print(f"LLM calls: {usage.llm_call_count}")
+                print(f"Tools:    {len(event.result.tool_executions)}")
+
+asyncio.run(monitor_cost())
+```
+
+## Cost-aware batch processing
+
+When running multiple agents in a batch, track cumulative cost:
+
+```python
+async def batch_process(items: list[str], budget_usd: float):
+    """Process items with a shared cost budget."""
+    runner = Runner()
+    cumulative_cost = 0.0
+    results = []
+
+    for item in items:
+        if cumulative_cost >= budget_usd:
+            print(f"[Limit] Budget exhausted at ${cumulative_cost:.4f}")
+            break
+
+        # Set per-item budget as remaining budget
+        remaining = budget_usd - cumulative_cost
+        agent = Agent(
+            name="batch-processor",
+            model="gpt-5.2-mini",
+            instructions="Process the item concisely.",
+            fail_safe=FailSafeConfig(
+                max_total_cost_usd=min(remaining, 0.10),  # Per-item cap
+                max_steps=5,
+            ),
+        )
+
+        result = await runner.run(agent, user_message=item)
+        cumulative_cost += result.usage.estimated_cost_usd
+        results.append(result)
+
+        print(f"  [OK] {item[:40]}... (${result.usage.estimated_cost_usd:.4f})")
+
+    print(f"\nTotal: {len(results)} items, ${cumulative_cost:.4f}")
+    return results
+```
+
+## Production recommendations
+
+1. **Always set `max_total_cost_usd`** — even generous limits prevent runaway costs
+2. **Layer defenses** — combine cost limits with `max_llm_calls`, `max_steps`, and `max_wall_time_s`
+3. **Use telemetry for dashboards** — export metrics to monitor cost trends over time
+4. **Set per-item budgets in batches** — prevent one expensive item from consuming the entire budget
+5. **Use cheaper models for iteration** — use `gpt-5.2-mini` for development, `gpt-5.2` for production
+
+## What to read next
+
+- [Observability](/library/observability) — Telemetry pipeline for metrics and dashboards.
+- [Failure Policy Matrix](/library/failure-policy-matrix) — How cost limit breaches flow through the system.
+- [Configuration Reference](/library/configuration-reference#failsafeconfig) — Full FailSafeConfig field reference.

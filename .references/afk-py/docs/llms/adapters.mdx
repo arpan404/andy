@@ -1,0 +1,137 @@
+---
+title: Adapters
+description: Built-in LLM providers and custom adapter registration.
+---
+
+Adapters translate between AFK's normalized contracts (`LLMRequest`/`LLMResponse`) and provider-specific APIs. AFK ships with three built-in adapters and supports custom adapters for any provider.
+
+## Built-in providers
+
+<CardGroup cols={3}>
+  <Card title="OpenAI" icon="circle-o">
+    Direct integration via the OpenAI Python SDK. Supports all GPT-4.1 and
+    o-series models.
+  </Card>
+  <Card title="Anthropic" icon="circle-a">
+    Direct integration via the Anthropic SDK. Supports Claude Opus 4.5 and Opus.
+  </Card>
+  <Card title="LiteLLM" icon="circle-l">
+    Proxy adapter for 100+ providers (Azure, Bedrock, Gemini, Mistral, local
+    models, etc.).
+  </Card>
+</CardGroup>
+
+## Capability comparison
+
+| Feature              | OpenAI                                                 | Anthropic                                              | LiteLLM                                                                     |
+| -------------------- | ------------------------------------------------------ | ------------------------------------------------------ | --------------------------------------------------------------------------- |
+| Text generation      | <Icon icon="check" iconType="solid" color="#22c55e" /> | <Icon icon="check" iconType="solid" color="#22c55e" /> | <Icon icon="check" iconType="solid" color="#22c55e" />                      |
+| Tool calling         | <Icon icon="check" iconType="solid" color="#22c55e" /> | <Icon icon="check" iconType="solid" color="#22c55e" /> | <Icon icon="check" iconType="solid" color="#22c55e" /> (provider-dependent) |
+| Structured output    | <Icon icon="check" iconType="solid" color="#22c55e" /> | <Icon icon="check" iconType="solid" color="#22c55e" /> | Provider-dependent                                                          |
+| Streaming            | <Icon icon="check" iconType="solid" color="#22c55e" /> | <Icon icon="check" iconType="solid" color="#22c55e" /> | <Icon icon="check" iconType="solid" color="#22c55e" />                      |
+| Vision (image input) | <Icon icon="check" iconType="solid" color="#22c55e" /> | <Icon icon="check" iconType="solid" color="#22c55e" /> | Provider-dependent                                                          |
+| Custom endpoints     | <Icon icon="check" iconType="solid" color="#22c55e" /> | <Icon icon="check" iconType="solid" color="#22c55e" /> | <Icon icon="check" iconType="solid" color="#22c55e" />                      |
+
+## Usage
+
+```python
+from afk.llms import LLMBuilder
+
+# OpenAI
+openai_client = LLMBuilder().provider("openai").model("gpt-5.2-mini").build()
+
+# Anthropic
+anthropic_client = LLMBuilder().provider("anthropic").model("claude-opus-4-5").build()
+
+# LiteLLM (any provider)
+gemini_client = LLMBuilder().provider("litellm").model("gemini/gemini-2.5-pro").build()
+```
+
+## Custom adapter
+
+Register your own adapter for unsupported providers or custom inference servers:
+
+<Steps>
+  <Step title="Implement the LLMAdapter protocol">
+    ```python
+    from afk.llms import LLMAdapter, LLMRequest, LLMResponse
+
+    class MyCustomAdapter(LLMAdapter):
+        def __init__(self, base_url: str, api_key: str):
+            self.base_url = base_url
+            self.api_key = api_key
+
+        async def generate(self, request: LLMRequest) -> LLMResponse:
+            # Translate LLMRequest → your provider's format
+            payload = self._build_payload(request)
+
+            # Make the API call
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    f"{self.base_url}/v1/complete",
+                    json=payload,
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                )
+
+            # Translate provider response → LLMResponse
+            return self._parse_response(resp.json())
+
+        async def generate_stream(self, request: LLMRequest):
+            # Optional: implement streaming
+            ...
+    ```
+
+  </Step>
+  <Step title="Register the adapter">
+    ```python
+    from afk.llms import register_adapter
+
+    register_adapter("my-provider", MyCustomAdapter)
+    ```
+
+  </Step>
+  <Step title="Use it">
+    ```python
+    client = LLMBuilder().provider("my-provider").model("my-model").build()
+
+    agent = Agent(name="demo", model=client, instructions="...")
+    ```
+
+  </Step>
+</Steps>
+
+## Custom transport
+
+Override the HTTP transport layer for any adapter (useful for proxies, mTLS, or custom retry logic):
+
+```python
+import httpx
+
+transport = httpx.AsyncHTTPTransport(
+    limits=httpx.Limits(max_connections=50, max_keepalive_connections=10),
+    retries=3,
+)
+
+client = (
+    LLMBuilder()
+    .provider("openai")
+    .model("gpt-5.2-mini")
+    .transport(transport)
+    .build()
+)
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card
+    title="Control & Session"
+    icon="sliders"
+    href="/llms/control-and-session"
+  >
+    Retry, caching, rate limiting, and circuit breaking.
+  </Card>
+  <Card title="Agent Integration" icon="link" href="/llms/agent-integration">
+    How agents resolve and use LLM clients.
+  </Card>
+</CardGroup>

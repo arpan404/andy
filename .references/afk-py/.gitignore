@@ -1,0 +1,27 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+ruff_cache/
+
+.DS_Store
+
+# Generated AI indexing artifacts
+ai-index/
+agent-skill/index.json
+agent-skill/examples.md
+agent-skill/*/references/afk-docs/
+agent-skill/*/references/examples.md
+agent-skill/*/references/README.md
+agent-skill/*/scripts/search_afk_docs.py
+
+.ruff_cache/ # Ruff's cache directory, we use it for linting and formatting
+afk_memory.sqlite3
+adk_memory.sqlite3-shm
+adk_memory.sqlite3-wal

@@ -1,0 +1,155 @@
+---
+title: Agentic Levels
+description: A capability maturity model — know when to add complexity.
+---
+
+AFK applications progress through five levels of capability. Each level adds features and complexity. Start at Level 1 and move up only when you have clear signals that the current level isn't enough.
+
+## The five levels
+
+<Steps>
+  <Step title="Level 1: Single Agent" icon="circle">
+    One agent, one model, no tools. The simplest possible setup.
+
+    ```python
+    agent = Agent(name="classifier", model="gpt-5.2-mini", instructions="Classify as positive/negative/neutral.")
+    result = runner.run_sync(agent, user_message="Great product!")
+    ```
+
+    **AFK features used:** `Agent`, `Runner`, `run_sync`
+
+    **Good for:** Text classification, summarization, translation, simple Q&A
+
+    **Move up when:** The agent needs to take actions or access external data
+
+  </Step>
+
+  <Step title="Level 2: Agent + Tools" icon="circle">
+    Add typed tool functions for the agent to call.
+
+    ```python
+    @tool(args_model=SearchArgs, name="search", description="Search knowledge base.")
+    def search(args: SearchArgs) -> dict: ...
+
+    agent = Agent(name="helper", model="gpt-5.2-mini", tools=[search])
+    ```
+
+    **AFK features added:** `@tool`, Pydantic models, `FailSafeConfig`
+
+    **Good for:** RAG, data lookup, calculations, API integrations
+
+    **Move up when:** Different parts of the task need different expertise or models
+
+  </Step>
+
+  <Step title="Level 3: Multi-Agent Delegation" icon="circle">
+    Coordinator delegates to specialist subagents.
+
+    ```python
+    coordinator = Agent(
+        name="coordinator",
+        model="gpt-5.2-mini",
+        subagents=[researcher, writer, reviewer],
+    )
+    ```
+
+    **AFK features added:** `subagents`, join policies, backpressure
+
+    **Good for:** Complex tasks, parallel work, specialist expertise, consensus
+
+    **Move up when:** Tasks take minutes, need async processing, or need queue-based reliability
+
+  </Step>
+
+  <Step title="Level 4: Queue-Backed Async" icon="circle">
+    Decouple producers and consumers with task queues. Long-running jobs execute asynchronously.
+
+    ```python
+    queue = TaskQueue(backend="redis")
+    await queue.push(TaskItem(contract="runner.chat.v1", agent=agent, user_message="..."))
+    ```
+
+    **AFK features added:** `TaskQueue`, `TaskItem`, workers, dead-letter handling
+
+    **Good for:** Batch processing, background jobs, retryable pipelines, high-throughput
+
+    **Move up when:** You need cross-system communication or external agent interop
+
+  </Step>
+
+  <Step title="Level 5: Cross-System A2A" icon="circle">
+    Agents communicate across systems using the A2A protocol with authenticated endpoints.
+
+    ```python
+    from afk.a2a import A2AClient
+    response = await a2a_client.invoke("external-agent", request=invocation_request)
+    ```
+
+    **AFK features added:** `A2AClient`, `A2AServer`, auth providers, external adapters
+
+    **Good for:** Microservice agent meshes, third-party integrations, federated AI systems
+
+    **This is the ceiling** — most applications don't need Level 5.
+
+  </Step>
+</Steps>
+
+## Capability comparison
+
+| Capability                 | L1                                                     | L2                                                     | L3                                                     | L4                                                     | L5                                                     |
+| -------------------------- | ------------------------------------------------------ | ------------------------------------------------------ | ------------------------------------------------------ | ------------------------------------------------------ | ------------------------------------------------------ |
+| Text generation            | <Icon icon="check" iconType="solid" color="#22c55e" /> | <Icon icon="check" iconType="solid" color="#22c55e" /> | <Icon icon="check" iconType="solid" color="#22c55e" /> | <Icon icon="check" iconType="solid" color="#22c55e" /> | <Icon icon="check" iconType="solid" color="#22c55e" /> |
+| Tool calling               | —                                                      | <Icon icon="check" iconType="solid" color="#22c55e" /> | <Icon icon="check" iconType="solid" color="#22c55e" /> | <Icon icon="check" iconType="solid" color="#22c55e" /> | <Icon icon="check" iconType="solid" color="#22c55e" /> |
+| Multi-agent delegation     | —                                                      | —                                                      | <Icon icon="check" iconType="solid" color="#22c55e" /> | <Icon icon="check" iconType="solid" color="#22c55e" /> | <Icon icon="check" iconType="solid" color="#22c55e" /> |
+| Async processing           | —                                                      | —                                                      | —                                                      | <Icon icon="check" iconType="solid" color="#22c55e" /> | <Icon icon="check" iconType="solid" color="#22c55e" /> |
+| Cross-system communication | —                                                      | —                                                      | —                                                      | —                                                      | <Icon icon="check" iconType="solid" color="#22c55e" /> |
+| Policy engine              | <Icon icon="circle" iconType="regular" />              | <Icon icon="check" iconType="solid" color="#22c55e" /> | <Icon icon="check" iconType="solid" color="#22c55e" /> | <Icon icon="check" iconType="solid" color="#22c55e" /> | <Icon icon="check" iconType="solid" color="#22c55e" /> |
+| Observability              | <Icon icon="circle" iconType="regular" />              | <Icon icon="circle" iconType="regular" />              | <Icon icon="check" iconType="solid" color="#22c55e" /> | <Icon icon="check" iconType="solid" color="#22c55e" /> | <Icon icon="check" iconType="solid" color="#22c55e" /> |
+| Evals                      | <Icon icon="circle" iconType="regular" />              | <Icon icon="circle" iconType="regular" />              | <Icon icon="check" iconType="solid" color="#22c55e" /> | <Icon icon="check" iconType="solid" color="#22c55e" /> | <Icon icon="check" iconType="solid" color="#22c55e" /> |
+
+<Icon icon="check" iconType="solid" color="#22c55e" /> = essential at this level
+&nbsp;&nbsp; <Icon icon="circle" iconType="regular" /> = recommended
+&nbsp;&nbsp; — = not applicable
+
+## Decision guide
+
+```mermaid
+flowchart TD
+    Start["What does your task need?"]
+    Start -->|"Just text in/out"| L1["Level 1: Single Agent"]
+    Start -->|"External data or actions"| L2["Level 2: Agent + Tools"]
+    Start -->|"Multiple specialists"| L3Q{"Long-running or high-volume?"}
+    L3Q -->|"No"| L3["Level 3: Multi-Agent"]
+    L3Q -->|"Yes"| L4Q{"Cross-system interop?"}
+    L4Q -->|"No"| L4["Level 4: Queue-Backed"]
+    L4Q -->|"Yes"| L5["Level 5: A2A"]
+```
+
+> [!TIP]
+> **Start at Level 1.** The simplest system that works is the best system. Premature complexity is the most common mistake in agent design.
+
+## Signals to level up
+
+| Signal                                          | Current Level | Move to                    |
+| ----------------------------------------------- | ------------- | -------------------------- |
+| Agent needs external data                       | 1             | 2 — Add tools              |
+| One prompt can't cover all expertise            | 2             | 3 — Split into specialists |
+| Users waiting too long for results              | 3             | 4 — Queue for async        |
+| Tasks fail and need to be retried automatically | 3             | 4 — Queue with DLQ         |
+| Other systems need to invoke your agents        | 4             | 5 — Expose A2A             |
+| Third-party agents need to use your tools       | 4             | 5 — Use MCP server         |
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card
+    title="Agentic Behavior"
+    icon="sitemap"
+    href="/library/agentic-behavior"
+  >
+    DAG orchestration, join policies, and fan-out.
+  </Card>
+  <Card title="Architecture" icon="layer-group" href="/library/architecture">
+    How AFK separates orchestration from execution.
+  </Card>
+</CardGroup>

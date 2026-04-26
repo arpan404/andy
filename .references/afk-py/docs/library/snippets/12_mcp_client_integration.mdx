@@ -1,0 +1,150 @@
+---
+title: "12: MCP Client Integration"
+description: Discover and use tools from external MCP servers in your agents.
+---
+
+## What this snippet demonstrates
+
+AFK agents can consume tools from external MCP (Model Context Protocol) servers just like local tools. This snippet shows how to connect to an MCP server, discover available tools, and attach them to an agent — all with the same validation, policy gates, and telemetry as local tools.
+
+## Consuming MCP tools
+
+### Connect, discover, and attach
+
+```python
+import asyncio
+from afk.agents import Agent, FailSafeConfig
+from afk.core import Runner
+from afk.mcp import MCPStore
+
+async def main():
+    # 1. Connect to an external MCP server
+    store = MCPStore()
+    await store.connect("https://tools.example.com:3001")
+
+    # 2. Discover available tools
+    tools = await store.list_tools()
+    print(f"Found {len(tools)} tools:")
+    for t in tools:
+        print(f"  • {t.name}: {t.description}")
+
+    # 3. Attach MCP tools to an agent — they work like local tools
+    agent = Agent(
+        name="mcp-assistant",
+        model="gpt-5.2-mini",
+        instructions="""
+        Use the available tools to help the user.
+        Always explain what tool you're using and why.
+        """,
+        tools=tools,
+        fail_safe=FailSafeConfig(
+            max_total_cost_usd=0.25,
+            max_tool_calls=10,
+        ),
+    )
+
+    # 4. Run the agent — MCP tools execute transparently
+    runner = Runner()
+    result = runner.run_sync(
+        agent, user_message="Search the documentation for authentication patterns"
+    )
+    print(f"\n{result.final_text}")
+
+    # 5. Inspect tool calls — MCP tools appear just like local tools
+    for rec in result.tool_executions:
+        print(f"  {'[OK]' if rec.success else '[ERR]'} {rec.tool_name} ({rec.latency_ms:.0f}ms)")
+
+    # 6. Disconnect
+    await store.disconnect()
+
+asyncio.run(main())
+```
+
+## Using the Agent's built-in MCP support
+
+For simpler setups, pass MCP server refs directly to the agent:
+
+```python
+from afk.agents import Agent
+
+# The agent connects to MCP servers automatically during startup
+agent = Agent(
+    name="connected-agent",
+    model="gpt-5.2-mini",
+    instructions="Use available tools to help the user.",
+    mcp_servers=[
+        "https://tools.example.com:3001",             # Simple URL
+        "search=https://search.internal:3002",         # Named server
+        {"url": "https://db.internal:3003", "auth": "token-xyz"},  # With auth
+    ],
+    enable_mcp_tools=True,  # Default: True
+)
+```
+
+## Mixing local and MCP tools
+
+Combine your own tools with external MCP tools:
+
+```python
+from pydantic import BaseModel
+from afk.agents import Agent
+from afk.tools import tool
+from afk.mcp import MCPStore
+
+class SummaryArgs(BaseModel):
+    text: str
+    max_words: int = 100
+
+@tool(args_model=SummaryArgs, name="summarize", description="Summarize text concisely.")
+def summarize(args: SummaryArgs) -> dict:
+    # Your local summarization logic
+    return {"summary": args.text[:args.max_words * 5] + "..."}
+
+
+async def build_agent():
+    # Get external tools
+    store = MCPStore()
+    await store.connect("https://tools.example.com:3001")
+    mcp_tools = await store.list_tools()
+
+    # Combine local + external tools
+    agent = Agent(
+        name="hybrid-agent",
+        model="gpt-5.2-mini",
+        instructions="Use search tools for research and summarize for concise output.",
+        tools=[summarize] + mcp_tools,  # ← Mix freely
+    )
+    return agent
+```
+
+## Security with MCP tools
+
+Apply policy rules to MCP-sourced tools just like local tools:
+
+```python
+from afk.agents import PolicyEngine, PolicyRule
+from afk.core import Runner
+
+policy = PolicyEngine(rules=[
+    PolicyRule(
+        rule_id="gate-mcp-writes",
+        condition=lambda e: e.tool_name and "write" in e.tool_name,
+        action="request_approval",
+        reason="MCP write operations need human approval",
+    ),
+])
+
+runner = Runner(policy_engine=policy)
+```
+
+<Tip>
+  **MCP tools are transparent.** Once attached to an agent, they go through the
+  same validation, policy gates, sanitization, and telemetry as local tools. The
+  agent doesn't know whether a tool is local or remote.
+</Tip>
+
+## What to read next
+
+- [MCP Server](/library/mcp-server) — Expose your own tools via MCP, plus authentication and rate limiting.
+- [Tools](/library/tools) — Full tool system architecture.
+- [Snippet 06: Tool Security](/library/snippets/06_tool_registry_security) — Policy gates and sandbox profiles.

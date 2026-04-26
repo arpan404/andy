@@ -1,0 +1,102 @@
+---
+title: "02: Policy with Human Interaction"
+description: Route sensitive actions through policy and human approval.
+---
+
+Human-in-the-loop (HITL) is the pattern where the agent pauses execution to request approval or input from a human operator before proceeding with a sensitive action. This is critical for any agent that can take destructive or irreversible actions -- deleting data, modifying production systems, sending communications, or spending money.
+
+AFK implements HITL through two components: a `PolicyEngine` that decides which actions require human intervention, and an `InteractionProvider` that routes the approval request to a human and returns their decision.
+
+## Basic example
+
+```python
+from afk.agents import Agent, PolicyEngine, PolicyRule
+from afk.core import Runner, RunnerConfig
+
+# Define a policy that gates destructive operations
+policy = PolicyEngine(rules=[
+    PolicyRule(
+        rule_id="gate-destructive-ops",
+        description="Require human approval for any destructive operation",
+        condition=lambda event: (
+            event.tool_name is not None
+            and any(keyword in event.tool_name.lower() for keyword in ["delete", "drop", "remove"])
+        ),
+        action="request_approval",
+        reason="Destructive operations require human approval before execution.",
+    ),
+])
+
+agent = Agent(
+    name="change-manager",
+    model="gpt-5.2-mini",
+    instructions="You manage infrastructure changes. Always use available tools.",
+)
+
+# Headless mode: approval requests are auto-resolved using approval_fallback
+runner = Runner(
+    policy_engine=policy,
+    config=RunnerConfig(
+        interaction_mode="headless",
+        approval_fallback="deny",  # Auto-deny in headless mode
+    ),
+)
+result = runner.run_sync(agent, user_message="Drop old production tables")
+print(f"State: {result.state}")
+# In headless mode with approval_fallback="deny", the destructive action is blocked.
+```
+
+## Interactive mode with an InteractionProvider
+
+In production, you typically want a real human to review approval requests. Use `interaction_mode="interactive"` with a custom `InteractionProvider`:
+
+```python
+from afk.core import Runner, RunnerConfig, InMemoryInteractiveProvider
+from afk.agents import ApprovalDecision
+
+# In-memory provider for testing (simulates human approval)
+provider = InMemoryInteractiveProvider()
+
+runner = Runner(
+    policy_engine=policy,
+    interaction_provider=provider,
+    config=RunnerConfig(
+        interaction_mode="interactive",
+        approval_timeout_s=300.0,  # Wait up to 5 minutes for human response
+    ),
+)
+
+# In a real application, a separate process or UI would call:
+# provider.resolve_approval(request_id, ApprovalDecision(kind="allow"))
+```
+
+## Headless vs interactive modes
+
+AFK supports three interaction modes, configured via `RunnerConfig.interaction_mode`:
+
+| Mode | Behavior | When to Use |
+| --- | --- | --- |
+| `"headless"` | Approval requests are auto-resolved using `approval_fallback` (default: `"deny"`). No human is involved. | CI/CD pipelines, batch processing, testing, automated workflows where no human is available. |
+| `"interactive"` | Approval requests are routed to the configured `InteractionProvider`. The runner pauses until a decision is returned or `approval_timeout_s` expires. | Production applications with human operators, chat UIs with approval buttons, Slack-based approval workflows. |
+| `"external"` | Similar to interactive, but designed for use in external orchestration systems where the approval mechanism is managed outside AFK. | Enterprise systems with external approval platforms. |
+
+## How the policy flow works
+
+1. The agent calls a tool (e.g., `drop_table`).
+2. Before executing, the runner sends a `PolicyEvent` to the `PolicyEngine`.
+3. The engine evaluates all rules. If a rule matches, it returns a `PolicyDecision` with the configured action.
+4. If the action is `request_approval`:
+   - In **headless** mode: the runner auto-resolves using `approval_fallback`.
+   - In **interactive** mode: the runner creates an `ApprovalRequest` and sends it to the `InteractionProvider`. Execution pauses until the provider returns an `ApprovalDecision`.
+5. If approved (`kind="allow"`): the tool executes normally.
+6. If denied (`kind="deny"`): the tool execution is skipped and the model receives a denial message as the tool result.
+7. A `policy_decision` event is emitted in the run event stream for audit purposes.
+
+## Policy decision actions
+
+| Action | Effect |
+| --- | --- |
+| `"allow"` | Proceed with execution. No human interaction needed. |
+| `"deny"` | Block execution immediately. The denial reason is reported to the model. |
+| `"request_approval"` | Pause and request human approval through the `InteractionProvider`. |
+| `"request_user_input"` | Pause and request freeform text input from a human operator. |

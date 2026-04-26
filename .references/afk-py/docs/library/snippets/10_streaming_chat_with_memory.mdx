@@ -1,0 +1,122 @@
+---
+title: "10: Streaming Chat with Memory"
+description: Combine real-time streaming with thread-based memory for multi-turn chat UIs.
+---
+
+## What this snippet demonstrates
+
+Most chat applications need two things simultaneously: **real-time streaming** (so users see text as it's generated) and **memory continuity** (so the agent remembers previous turns). This snippet shows how to combine `run_stream()` with `thread_id` to build a multi-turn streaming chat handler.
+
+## Full example
+
+```python
+import asyncio
+from afk.agents import Agent, FailSafeConfig
+from afk.core import Runner, RunnerConfig
+
+agent = Agent(
+    name="chat-assistant",
+    model="gpt-5.2-mini",
+    instructions="""
+    You are a helpful assistant. Remember context from earlier in the conversation.
+    Be concise but thorough. If the user refers to something from a previous message,
+    use that context in your response.
+    """,
+    fail_safe=FailSafeConfig(
+        max_steps=10,
+        max_total_cost_usd=0.25,
+    ),
+)
+
+
+async def stream_turn(runner: Runner, user_message: str, thread_id: str):
+    """Stream a single turn and return the result."""
+    handle = await runner.run_stream(
+        agent,
+        user_message=user_message,
+        thread_id=thread_id,  # ← Same thread_id = same conversation
+    )
+
+    async for event in handle:
+        match event.type:
+            case "text_delta":
+                print(event.text_delta, end="", flush=True)
+            case "tool_started":
+                print(f"\n[TOOL] {event.tool_name}...")
+            case "tool_completed":
+                status = "[OK]" if event.tool_success else "[ERR]"
+                print(f"   {status} done")
+            case "error":
+                if event.error:
+                    print(f"\n[WARN] {event.error}")
+            case "completed":
+                print(f"\n[DONE] ({event.result.state})")
+
+    return handle.result
+
+
+async def main():
+    runner = Runner(config=RunnerConfig(interaction_mode="headless"))
+    thread = "session-demo-42"
+
+    # Turn 1
+    print("User: What is the GIL in Python?\n")
+    print("Assistant: ", end="")
+    r1 = await stream_turn(runner, "What is the GIL in Python?", thread)
+
+    # Turn 2 — agent remembers Turn 1
+    print("\n\nUser: How does it affect multithreading?\n")
+    print("Assistant: ", end="")
+    r2 = await stream_turn(runner, "How does it affect multithreading?", thread)
+
+    # Turn 3 — agent still has full context
+    print("\n\nUser: What are the alternatives?\n")
+    print("Assistant: ", end="")
+    r3 = await stream_turn(runner, "What are the alternatives?", thread)
+
+    # Print usage summary
+    print(f"\n\n--- Usage ---")
+    for i, r in enumerate([r1, r2, r3], 1):
+        print(f"Turn {i}: {r.usage.total_tokens} tokens")
+
+
+asyncio.run(main())
+```
+
+## Key patterns
+
+### Thread ID connects turns
+
+Pass the same `thread_id` across `run_stream()` calls to maintain conversation context:
+
+```python
+# These two calls share memory
+r1 = await runner.run_stream(agent, user_message="Hello", thread_id="t-42")
+r2 = await runner.run_stream(agent, user_message="Follow up", thread_id="t-42")
+```
+
+### Access the result after streaming
+
+The `handle.result` is available after the stream completes:
+
+```python
+async for event in handle:
+    ...  # Process events
+
+result = handle.result  # Full AgentResult with final_text, usage, etc.
+```
+
+### Cancel mid-stream
+
+If the user navigates away or clicks "stop":
+
+```python
+await handle.cancel()
+# The run transitions to "cancelled" state
+```
+
+## What to read next
+
+- [Streaming](/library/streaming) — Full event reference and stream control API.
+- [Memory](/library/memory) — Thread persistence, compaction, and backend configuration.
+- [Snippet 04: Resume + Compact](/library/snippets/04_resume_and_compact) — Checkpoint-based resumption and memory management.

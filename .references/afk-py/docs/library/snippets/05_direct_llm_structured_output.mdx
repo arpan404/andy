@@ -1,0 +1,85 @@
+---
+title: "05: Direct LLM Structured Output"
+description: Use afk.llms with schema-validated responses.
+---
+
+Not every use case needs the full agent loop. Sometimes you want to call an LLM directly with a specific prompt and get back a structured, schema-validated response. AFK's `LLMBuilder` provides a fluent API for constructing LLM clients that can return Pydantic-validated objects directly, without the overhead of the agent run lifecycle.
+
+Use this pattern for classification, extraction, summarization, and any scenario where you want a single LLM call with a guaranteed output schema.
+
+## Example
+
+```python
+from pydantic import BaseModel
+from afk.llms import LLMBuilder
+from afk.llms.types import LLMRequest, Message
+
+# Define the output schema as a Pydantic model
+class Summary(BaseModel):
+    title: str
+    bullets: list[str]
+
+# Build an LLM client using the fluent builder
+client = LLMBuilder().provider("openai").model("gpt-5.2-mini").profile("production").build()
+
+# Make a structured request
+resp = await client.chat(
+    LLMRequest(messages=[Message(role="user", content="Summarize incident timeline")]),
+    response_model=Summary,
+)
+print(resp.structured_response)  # {"title": "...", "bullets": ["...", "..."]}
+print(resp.text)                 # The raw text response
+```
+
+## The builder pattern
+
+`LLMBuilder` uses a fluent (method-chaining) API to construct an LLM client with the exact configuration you need:
+
+```python
+client = (
+    LLMBuilder()
+    .provider("openai")          # Which LLM provider to use
+    .model("gpt-5.2-mini")      # Which model
+    .profile("production")       # Apply a preset profile (retry, timeout, etc.)
+    .temperature(0.0)            # Override sampling temperature
+    .max_tokens(1000)            # Set max response tokens
+    .build()                     # Return the configured LLMClient
+)
+```
+
+Each method returns the builder instance, so calls can be chained. The `.build()` call at the end constructs the final `LLMClient` with all specified settings.
+
+Available builder methods:
+
+| Method | Purpose |
+| --- | --- |
+| `.provider(name)` | Set the LLM provider (`"openai"`, `"litellm"`, `"anthropic_agent"`). |
+| `.model(name)` | Set the model identifier. |
+| `.profile(name)` | Apply a named configuration profile (`"production"`, `"development"`, etc.). |
+| `.temperature(value)` | Set sampling temperature (0.0-2.0). |
+| `.max_tokens(value)` | Set maximum response tokens. |
+| `.top_p(value)` | Set nucleus sampling parameter. |
+| `.timeout(seconds)` | Set request timeout. |
+| `.build()` | Construct and return the `LLMClient`. |
+
+## Structured output with Pydantic
+
+When you pass `response_model=YourModel` to `client.chat()`, the client instructs the LLM to return output that conforms to the model's JSON schema. The response is parsed and validated against the Pydantic model:
+
+- If the LLM returns valid structured output, `resp.structured_response` contains the parsed dictionary and `resp.text` contains the raw response.
+- If the LLM returns output that does not match the schema, a `LLMInvalidResponseError` is raised.
+
+This is powered by the LLM provider's native structured output support (e.g., OpenAI's `response_format` parameter) when available, with a fallback to prompt-based JSON extraction.
+
+## When to use LLMBuilder vs Runner
+
+| Use Case | Approach |
+| --- | --- |
+| Single LLM call, no tools, no memory | `LLMBuilder` -- simpler, faster, no lifecycle overhead. |
+| Structured extraction or classification | `LLMBuilder` with `response_model`. |
+| Multi-turn conversation with tools | `Runner` -- provides the full agent loop with tool execution, policy, and memory. |
+| Subagent delegation | `Runner` -- only the runner supports subagent dispatch. |
+| Event streaming to a UI | `Runner` with `run_stream()`. |
+| Eval-driven development | `Runner` -- evals require the full `AgentResult` lifecycle. |
+
+Use `LLMBuilder` when you want precision and control over a single LLM interaction. Use `Runner` when you need the full agentic lifecycle.

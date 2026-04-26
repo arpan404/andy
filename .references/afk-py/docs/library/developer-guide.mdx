@@ -1,0 +1,197 @@
+---
+title: Developer Guide
+description: Contribute to AFK — conventions, patterns, and quality tools.
+---
+
+This guide is for developers contributing to the AFK framework itself. It covers the implementation workflow, code conventions, testing expectations, and quality tools.
+
+<Note>
+  **Building an app with AFK?** See [Building with
+  AI](/library/building-with-ai) instead. This page is for AFK framework
+  contributors.
+</Note>
+
+## Implementation workflow
+
+<Steps>
+  <Step title="Define the contract">
+    Start with the Pydantic model or Python protocol that defines the interface. This is the most important step — everything else flows from the contract.
+
+    ```python
+    from pydantic import BaseModel
+
+    class ToolExecutionRecord(BaseModel):
+        tool_name: str
+        success: bool
+        output: str | None
+        latency_ms: float
+        error: str | None = None
+    ```
+
+  </Step>
+  <Step title="Implement behavior">
+    Write the implementation that fulfills the contract. Keep the implementation focused — one module, one responsibility.
+
+    ```python
+    async def execute_tool(call: ToolCall) -> ToolExecutionRecord:
+        start = time.time()
+        try:
+            result = await call.handler(call.validated_args)
+            return ToolExecutionRecord(
+                tool_name=call.name,
+                success=True,
+                output=str(result),
+                latency_ms=(time.time() - start) * 1000,
+            )
+        except Exception as e:
+            return ToolExecutionRecord(
+                tool_name=call.name,
+                success=False,
+                output=None,
+                latency_ms=(time.time() - start) * 1000,
+                error=str(e),
+            )
+    ```
+
+  </Step>
+  <Step title="Test failure semantics">
+    Test the **failure paths** first — they're more important than the happy path. Every error should be classified (retryable, terminal, non-fatal).
+
+    ```python
+    def test_tool_timeout_produces_record():
+        """Timeout should produce a record with success=False, not crash."""
+        record = await execute_tool(slow_tool_call)
+        assert record.success is False
+        assert "timeout" in record.error.lower()
+
+    def test_invalid_args_returns_validation_error():
+        """Bad arguments should return a clear error, not raise."""
+        record = await execute_tool(bad_args_call)
+        assert record.success is False
+        assert "validation" in record.error.lower()
+    ```
+
+  </Step>
+  <Step title="Document interfaces">
+    Add docstrings to public functions and classes. Include parameter descriptions and examples.
+  </Step>
+</Steps>
+
+## Project structure
+
+```
+src/afk/
+├── agents/          # Agent definition, FailSafeConfig, PolicyEngine
+├── core/            # Runner, step loop, state management
+│   └── runner/      # Runner implementation
+├── llms/            # LLM runtime, provider adapters
+├── tools/           # Tool registry, execution, hooks
+├── memory/          # State persistence, checkpoints
+├── telemetry/       # Event pipeline, exporters
+├── a2a/             # Agent-to-agent protocol
+├── evals/           # Eval runner, assertions
+└── skills/          # Agent skills system
+```
+
+## Code conventions
+
+| Convention         | Rule                                                                                        |
+| ------------------ | ------------------------------------------------------------------------------------------- |
+| **Contracts**      | All public interfaces are Pydantic models or Python protocols                               |
+| **Imports**        | No cross-adapter imports (`afk.llms` ↛ `afk.tools`). Only `afk.core` wires modules.         |
+| **Error handling** | Classify errors: retryable, terminal, or non-fatal. Never raise unclassified exceptions.    |
+| **Async**          | Public APIs support both sync and async. Use `run_sync()` as a sync wrapper around `run()`. |
+| **Naming**         | Snake_case for functions/variables, PascalCase for classes, UPPER_CASE for constants        |
+| **Type hints**     | Required on all public functions and parameters                                             |
+
+## Common mistakes
+
+<AccordionGroup>
+  <Accordion title="Mixing orchestration and provider logic">
+    **Wrong:** Runner code that contains OpenAI-specific types.
+
+    ```python
+    # [BAD] Bad: OpenAI types in the runner
+    from openai.types.chat import ChatCompletion
+    result = await openai_client.chat.completions.create(...)
+    ```
+
+    **Right:** Runner sends `LLMRequest`, receives `LLMResponse`.
+
+    ```python
+    # [OK] Good: Provider-agnostic contracts
+    response: LLMResponse = await llm_client.generate(request)
+    ```
+
+  </Accordion>
+  <Accordion title="Not classifying failures">
+    **Wrong:** All errors treated the same way.
+
+    ```python
+    # [BAD] Bad: Generic exception, no classification
+    except Exception as e:
+        raise RuntimeError(f"Tool failed: {e}")
+    ```
+
+    **Right:** Errors classified for the runner to handle appropriately.
+
+    ```python
+    # [OK] Good: Classified failure
+    except httpx.TimeoutException:
+        return ToolResult(success=False, error_type="retryable", error="Timeout")
+    except ValueError as e:
+        return ToolResult(success=False, error_type="terminal", error=str(e))
+    ```
+
+  </Accordion>
+  <Accordion title="Skipping contract validation">
+    **Wrong:** Passing raw dicts between modules.
+
+    ```python
+    # [BAD] Bad: Unvalidated dict
+    return {"tool_name": name, "result": output}
+    ```
+
+    **Right:** Using the Pydantic model.
+
+    ```python
+    # [OK] Good: Validated contract
+    return ToolExecutionRecord(tool_name=name, success=True, output=output)
+    ```
+
+  </Accordion>
+</AccordionGroup>
+
+## Quality tools
+
+| Tool                 | Command                       | Purpose                                    |
+| -------------------- | ----------------------------- | ------------------------------------------ |
+| **Ruff**             | `ruff check src/ tests/`      | Linting (replaces flake8, isort, pyflakes) |
+| **Ruff format**      | `ruff format src/ tests/`     | Code formatting (replaces black)           |
+| **Pytest**           | `pytest tests/`               | Run test suite                             |
+| **Pytest (verbose)** | `pytest tests/ -v --tb=short` | Run with verbose output                    |
+| **Type check**       | `pyright src/`                | Static type checking                       |
+
+## Testing expectations
+
+- **Unit tests** for every public function and class
+- **Failure tests** for every error path (timeout, validation, policy denial)
+- **Integration tests** for module boundaries (runner ↔ LLM, runner ↔ tools)
+- **Eval tests** for agent behavior (prompt produces expected output)
+
+<Tip>
+  **Test failure semantics first.** The happy path usually works. The failure
+  paths are where bugs hide. For every new feature, write at least 2 failure
+  tests for every 1 success test.
+</Tip>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Architecture" icon="layer-group" href="/library/architecture">
+    Module boundaries and design principles.
+  </Card>
+  <Card title="Evals" icon="check-circle" href="/library/evals">
+    Behavioral testing framework.
+  </Card>
+</CardGroup>

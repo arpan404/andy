@@ -1,0 +1,255 @@
+---
+title: Configuration Reference
+description: Every configurable field across Agent, Runner, FailSafeConfig, and SandboxProfile.
+---
+
+This page is a single-source reference for every configuration knob in AFK. Each section lists fields with their type, default value, and purpose.
+
+## Agent
+
+The `Agent` constructor defines what your agent is — identity, model, tools, and behavior.
+
+```python
+from afk.agents import Agent
+```
+
+| Field                       | Type              | Default          | Description                                                    |
+| --------------------------- | ----------------- | ---------------- | -------------------------------------------------------------- |
+| `model`                     | `str \| LLM`      | **required**     | LLM model name or pre-built client instance                    |
+| `name`                      | `str`             | class name       | Agent identity for logs, telemetry, and subagent routing       |
+| `instructions`              | `str \| callable` | `None`           | System prompt — static string or callable provider             |
+| `instruction_file`          | `str \| Path`     | `None`           | Path to a prompt file (resolved under `prompts_dir`)           |
+| `prompts_dir`               | `str \| Path`     | `None`           | Root directory for prompt files (env: `AFK_AGENT_PROMPTS_DIR`) |
+| `tools`                     | `list`            | `[]`             | Typed functions the agent can call                             |
+| `subagents`                 | `list[Agent]`     | `[]`             | Specialist agents this agent can delegate to                   |
+| `context_defaults`          | `dict`            | `{}`             | Default JSON context merged into each run                      |
+| `inherit_context_keys`      | `list[str]`       | `[]`             | Context keys accepted from a parent subagent                   |
+| `model_resolver`            | `callable`        | `None`           | Custom function to resolve model names to LLM clients          |
+| `skills`                    | `list[str]`       | `[]`             | Skill names to resolve under `skills_dir`                      |
+| `mcp_servers`               | `list`            | `[]`             | External MCP server refs whose tools to expose                 |
+| `skills_dir`                | `str \| Path`     | `.agents/skills` | Root directory for skill definitions                           |
+| `instruction_roles`         | `list`            | `[]`             | Callbacks that append dynamic instruction text                 |
+| `policy_roles`              | `list`            | `[]`             | Callbacks that can allow/deny/defer runtime actions            |
+| `policy_engine`             | `PolicyEngine`    | `None`           | Deterministic rule engine applied before policy roles          |
+| `subagent_router`           | `SubagentRouter`  | `None`           | Router callback deciding subagent targets                      |
+| `max_steps`                 | `int`             | `20`             | Maximum reasoning/tool loop steps                              |
+| `tool_parallelism`          | `int`             | `None`           | Max concurrent tool calls (falls back to `fail_safe`)          |
+| `subagent_parallelism_mode` | `str`             | `configurable`   | `single`, `parallel`, or `configurable`                        |
+| `fail_safe`                 | `FailSafeConfig`  | defaults         | Runtime limits and failure policies                            |
+| `reasoning_enabled`         | `bool \| None`    | `None`           | Default request `thinking` flag for this agent                 |
+| `reasoning_effort`          | `str \| None`     | `None`           | Default request `thinking_effort` label                         |
+| `reasoning_max_tokens`      | `int \| None`     | `None`           | Default request `max_thinking_tokens`                           |
+| `enable_skill_tools`        | `bool`            | `True`           | Auto-register built-in skill tools                             |
+| `enable_mcp_tools`          | `bool`            | `True`           | Auto-register tools from configured MCP servers                |
+| `runner`                    | `Runner`          | `None`           | Optional runner override                                       |
+
+### Reasoning override precedence
+
+Reasoning values are resolved in this order:
+
+1. Run context override: `context[\"_afk\"][\"reasoning\"]`
+2. Agent defaults: `reasoning_enabled`, `reasoning_effort`, `reasoning_max_tokens`
+3. Provider defaults/validation in the LLM layer
+
+---
+
+## RunnerConfig
+
+Passed to `Runner(config=RunnerConfig(...))` to control runtime behavior.
+
+```python
+from afk.core import RunnerConfig
+```
+
+| Field                                     | Type             | Default                                    | Description                                                |
+| ----------------------------------------- | ---------------- | ------------------------------------------ | ---------------------------------------------------------- |
+| `interaction_mode`                        | `str`            | `headless`                                 | `headless`, `interactive`, or `external`                   |
+| `approval_timeout_s`                      | `float`          | `300.0`                                    | Timeout for deferred approval decisions                    |
+| `input_timeout_s`                         | `float`          | `300.0`                                    | Timeout for deferred user-input decisions                  |
+| `approval_fallback`                       | `str`            | `deny`                                     | Fallback when approval times out: `allow`, `deny`, `defer` |
+| `input_fallback`                          | `str`            | `deny`                                     | Fallback when user input times out                         |
+| `sanitize_tool_output`                    | `bool`           | `True`                                     | Sanitize model-visible tool output                         |
+| `untrusted_tool_preamble`                 | `bool`           | `True`                                     | Inject untrusted-data warning preamble                     |
+| `tool_output_max_chars`                   | `int`            | `12_000`                                   | Max tool output characters forwarded to model              |
+| `default_sandbox_profile`                 | `SandboxProfile` | `None`                                     | Default sandbox profile for tool execution                 |
+| `sandbox_profile_provider`                | `callable`       | `None`                                     | Runtime sandbox profile resolver                           |
+| `secret_scope_provider`                   | `callable`       | `None`                                     | Secret-scope resolver per tool call                        |
+| `default_allowlisted_commands`            | `tuple[str]`     | `ls, cat, head, tail, rg, find, pwd, echo` | Allowlisted shell commands for runtime tools               |
+| `max_parallel_subagents_global`           | `int`            | `64`                                       | Global cap for concurrent subagent tasks                   |
+| `max_parallel_subagents_per_parent`       | `int`            | `8`                                        | Per-parent-run cap for concurrent subagent fanout          |
+| `max_parallel_subagents_per_target_agent` | `int`            | `4`                                        | Per-target-agent cap                                       |
+| `subagent_queue_backpressure_limit`       | `int`            | `512`                                      | Max pending subagent nodes before backpressure             |
+| `checkpoint_async_writes`                 | `bool`           | `True`                                     | Enable background checkpoint/state writes                   |
+| `checkpoint_queue_maxsize`                | `int`            | `1024`                                     | Max queued checkpoint write jobs                            |
+| `checkpoint_flush_timeout_s`              | `float`          | `10.0`                                     | Timeout for terminal checkpoint flush                       |
+| `checkpoint_coalesce_runtime_state`       | `bool`           | `True`                                     | Coalesce repeated `runtime_state` checkpoint writes         |
+| `debug`                                   | `bool`           | `False`                                    | Enable debug metadata in emitted run events                 |
+| `debug_config`                            | `RunnerDebugConfig \| None` | `None`                          | Advanced debug controls (verbosity/content/redaction)       |
+| `background_tools_enabled`                | `bool`           | `True`                                     | Enable deferred/background tool orchestration               |
+| `background_tool_default_grace_s`         | `float`          | `0.0`                                      | Wait this long after defer to allow fast background completion before continuing |
+| `background_tool_max_pending`             | `int`            | `256`                                      | Maximum unresolved background tool tickets per run          |
+| `background_tool_poll_interval_s`         | `float`          | `0.5`                                      | Poll interval for external/persisted ticket resolution      |
+| `background_tool_result_ttl_s`            | `float`          | `3600.0`                                   | TTL before pending ticket is marked failed (runtime floor is 1.0s) |
+| `background_tool_interrupt_on_resolve`    | `bool`           | `True`                                     | When enabled, resolved tickets can be ingested immediately after defer/grace in the same step |
+
+### Deep Dive: Interaction Models
+
+The `interaction_mode` setting fundamentally changes how the Runner handles decision points like tool approval or user input requests.
+
+- **`headless` (default)**: The Runner never pauses.
+  - If a policy returns `defer` or `request_user_input`, the Runner immediately uses the configured `approval_fallback` or `input_fallback` (default: `deny`).
+  - _Use case:_ Backend workers, cron jobs, automated testing.
+
+- **`interactive`**: The Runner pauses execution and uses the configured `InteractionProvider` to ask for human input.
+  - For CLI apps, this prints to stdout and reads from stdin.
+  - The run blocks until input is received or `approval_timeout_s` expires.
+  - _Use case:_ Local CLI tools, scripts run by humans.
+
+- **`external`**: The Runner emits a `run_paused` event and **suspends execution**.
+  - The `run()` loop exits (or yields a paused state). The state is persisted to memory.
+  - The system waits for an external API call to `runner.resume_with_input()`.
+  - _Use case:_ Chatbots, web UIs, Slack bots where the user is asynchronous.
+
+---
+
+## FailSafeConfig
+
+Passed to `Agent(fail_safe=FailSafeConfig(...))` to set runtime limits and failure policies.
+
+```python
+from afk.agents import FailSafeConfig
+```
+
+| Field                          | Type            | Default               | Description                                   |
+| ------------------------------ | --------------- | --------------------- | --------------------------------------------- |
+| `llm_failure_policy`           | `FailurePolicy` | `retry_then_fail`     | Strategy when LLM calls fail                  |
+| `tool_failure_policy`          | `FailurePolicy` | `continue_with_error` | Strategy when tool calls fail                 |
+| `subagent_failure_policy`      | `FailurePolicy` | `continue`            | Strategy when subagent calls fail             |
+| `approval_denial_policy`       | `FailurePolicy` | `skip_action`         | Strategy when approval is denied or times out |
+| `max_steps`                    | `int`           | `20`                  | Maximum run loop iterations                   |
+| `max_wall_time_s`              | `float`         | `300.0`               | Maximum wall-clock runtime in seconds         |
+| `max_llm_calls`                | `int`           | `50`                  | Maximum number of LLM invocations             |
+| `max_tool_calls`               | `int`           | `200`                 | Maximum number of tool invocations            |
+| `max_parallel_tools`           | `int`           | `16`                  | Max concurrent tools per batch                |
+| `max_subagent_depth`           | `int`           | `3`                   | Maximum subagent recursion depth              |
+| `max_subagent_fanout_per_step` | `int`           | `4`                   | Maximum subagents selected per step           |
+| `max_total_cost_usd`           | `float \| None` | `None`                | Cost ceiling for run termination              |
+| `fallback_model_chain`         | `list[str]`     | `[]`                  | Ordered fallback model list for LLM retries   |
+| `breaker_failure_threshold`    | `int`           | `5`                   | Circuit breaker open threshold                |
+| `breaker_cooldown_s`           | `float`         | `30.0`                | Circuit breaker cooldown window in seconds    |
+
+### Deep Dive: Failure & Recovery
+
+FailSafeConfig controls the agent's resilience. The policies work in a hierarchy:
+
+1.  **Lower-level retries**: Transient errors (network glitches, rate limits) are retried automatically by the LLM client, guided by `AFK_LLM_MAX_RETRIES`.
+
+2.  **`llm_failure_policy`**: If the LLM call fails after all retries (or hits a terminal error like 401 Unauthorized):
+    - `retry_then_fail`: Tries a few more times at the agent level, then fails the run.
+    - `retry_then_degrade`: Tries again, then marks the run as `degraded` but returns partial results (useful for "best effort" responses).
+
+3.  **`tool_failure_policy`**: If a tool raises an exception:
+    - `continue_with_error` (default): The error message is fed back to the model. The model can then try to fix its mistake or apologize. **This is usually the best setting** for capable models.
+    - `fail_run`: Immediately stops the run. Use this for critical transactional agents where any error is unacceptable.
+
+4.  **Circuit Breakers**:
+    - If a model provider fails `breaker_failure_threshold` times in a row, the circuit opens.
+    - Subsequent calls fail _instantly_ without network traffic until `breaker_cooldown_s` passes.
+    - This protects your system (and wallet) from hammering a down service.
+
+### FailurePolicy values
+
+| Value                 | Behavior                                             |
+| --------------------- | ---------------------------------------------------- |
+| `retry_then_fail`     | Retry with backoff, then fail the run                |
+| `retry_then_degrade`  | Retry with backoff, then degrade (partial result)    |
+| `retry_then_continue` | Retry with backoff, then continue without the result |
+| `fail_fast`           | Fail immediately, no retries                         |
+| `fail_run`            | Fail the entire run                                  |
+| `continue_with_error` | Continue, passing the error to the model             |
+| `continue`            | Continue silently, ignoring the failure              |
+| `skip_action`         | Skip the action entirely                             |
+
+---
+
+## SandboxProfile
+
+Controls execution restrictions for tool handlers. Configured via `RunnerConfig.default_sandbox_profile`.
+
+```python
+from afk.tools import SandboxProfile
+```
+
+| Field                      | Type            | Default   | Description                                    |
+| -------------------------- | --------------- | --------- | ---------------------------------------------- |
+| `profile_id`               | `str`           | `default` | Profile identifier for logs and policy         |
+| `allow_network`            | `bool`          | `False`   | Whether tools can make network requests        |
+| `allow_command_execution`  | `bool`          | `True`    | Whether tools can execute shell commands       |
+| `allowed_command_prefixes` | `list[str]`     | `[]`      | Allowed command prefixes (empty = all allowed) |
+| `deny_shell_operators`     | `bool`          | `True`    | Block pipes, redirects, semicolons             |
+| `allowed_paths`            | `list[str]`     | `[]`      | Restrict file access to these paths            |
+| `denied_paths`             | `list[str]`     | `[]`      | Explicitly deny access to these paths          |
+| `command_timeout_s`        | `float \| None` | `None`    | Kill commands after this duration              |
+| `max_output_chars`         | `int`           | `20_000`  | Truncate command output beyond this limit      |
+
+---
+
+## Runner constructor
+
+The `Runner` accepts these arguments directly (outside of `RunnerConfig`):
+
+```python
+from afk.core import Runner
+
+runner = Runner(
+    memory_store=...,           # MemoryStore instance
+    interaction_provider=...,   # InteractionProvider for HITL
+    policy_engine=...,          # PolicyEngine instance
+    telemetry=...,              # "console" | "otel" | "json" | TelemetrySink
+    telemetry_config=...,       # Backend-specific config dict
+    config=...,                 # RunnerConfig instance
+)
+```
+
+| Argument               | Type                   | Default          | Description                                            |
+| ---------------------- | ---------------------- | ---------------- | ------------------------------------------------------ |
+| `memory_store`         | `MemoryStore`          | `None`           | Memory backend (resolved from env if `None`)           |
+| `interaction_provider` | `InteractionProvider`  | `None`           | Human-in-the-loop provider (required for non-headless) |
+| `policy_engine`        | `PolicyEngine`         | `None`           | Deterministic policy engine shared across runs         |
+| `telemetry`            | `str \| TelemetrySink` | `None`           | Telemetry sink instance or backend id                  |
+| `telemetry_config`     | `dict`                 | `None`           | Backend-specific sink configuration                    |
+| `config`               | `RunnerConfig`         | `RunnerConfig()` | Runner configuration                                   |
+
+---
+
+## @tool decorator
+
+```python
+from afk.tools import tool
+```
+
+| Argument         | Type               | Default       | Description                                                       |
+| ---------------- | ------------------ | ------------- | ----------------------------------------------------------------- |
+| `args_model`     | `Type[BaseModel]`  | **required**  | Pydantic model for argument validation                            |
+| `name`           | `str`              | function name | Tool name exposed to the LLM                                      |
+| `description`    | `str`              | docstring     | Tool description for the LLM                                      |
+| `timeout`        | `float`            | `None`        | Execution timeout in seconds                                      |
+| `prehooks`       | `list[PreHook]`    | `None`        | Argument transform hooks                                          |
+| `posthooks`      | `list[PostHook]`   | `None`        | Output transform hooks                                            |
+| `middlewares`    | `list[Middleware]` | `None`        | Execution wrappers (logging, caching, etc.)                       |
+| `raise_on_error` | `bool`             | `False`       | Raise exceptions instead of returning `ToolResult(success=False)` |
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card
+    title="Environment Variables"
+    icon="gear"
+    href="/library/environment-variables"
+  >
+    Environment variable defaults and backend selection.
+  </Card>
+  <Card title="API Reference" icon="book" href="/library/api-reference">
+    Quick import reference.
+  </Card>
+</CardGroup>

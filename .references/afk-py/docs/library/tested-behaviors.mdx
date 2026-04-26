@@ -1,0 +1,136 @@
+---
+title: Tested Behaviors
+description: Contract-level guarantees and what test suites validate.
+---
+
+AFK maintains a comprehensive test suite that validates contract-level guarantees across every major subsystem. These tests are not implementation details -- they define the behavioral contracts that the framework promises to uphold across releases. If a test fails, it means a contract has been broken.
+
+This page documents what each test category validates, why those guarantees matter for your application, and how to run and extend the test suite.
+
+## Guaranteed behaviors
+
+### Deterministic delegation ordering
+
+**What is tested:** When a parent agent dispatches work to subagents, the delegation engine executes nodes in a deterministic, topologically sorted order. Parallel batches respect concurrency limits. Edge dependencies (where one subagent's output feeds into another's input) are resolved before the dependent node starts.
+
+**Why it matters:** If delegation ordering were non-deterministic, the same agent configuration could produce different results depending on task scheduling. Deterministic ordering means your subagent pipelines are reproducible and debuggable.
+
+**Test coverage:** Tests verify that DAG plans produce consistent node execution sequences, that edge-based data flow resolves correctly, and that backpressure limits prevent unbounded queue growth.
+
+### Queue contract failure classification
+
+**What is tested:** The task queue system classifies failures into retryable, terminal, and degraded categories. Retryable failures trigger retry with backoff. Terminal failures stop execution immediately. Degraded states allow partial results.
+
+**Why it matters:** Incorrect failure classification can cause infinite retry loops (if terminal failures are marked retryable) or premature task abandonment (if retryable failures are marked terminal). The failure classification contract ensures that each failure type triggers the correct recovery behavior.
+
+**Test coverage:** Tests verify that each failure category maps to the correct queue behavior, that retry counts and backoff intervals are respected, and that dead-letter handling works correctly.
+
+### Stream lifecycle correctness
+
+**What is tested:** The streaming API (`runner.run_stream()`) produces events in the correct lifecycle order: stream starts, text deltas arrive, tool events fire at the right times, and the stream terminates with a `completed` event containing the final `AgentResult`. Error conditions produce `error` stream events rather than unhandled exceptions.
+
+**Why it matters:** Streaming consumers (such as chat UIs) depend on events arriving in the correct order. A misplaced `completed` event before all text deltas have been emitted would cause truncated output. An unhandled exception would crash the consumer.
+
+**Test coverage:** Tests verify event ordering, ensure that all text content is captured before the terminal event, and confirm that error conditions produce structured error events.
+
+### Telemetry projection stability
+
+**What is tested:** The telemetry projector produces consistent `RunMetrics` from the same input data. Field names, types, and computed properties (like `avg_llm_latency_ms` and `success`) are stable across versions.
+
+**Why it matters:** Downstream dashboards, alerting rules, and eval assertions depend on `RunMetrics` having a stable schema. If a field is renamed or its type changes, every consumer breaks silently.
+
+**Test coverage:** Tests verify that projected metrics match expected values for known input data, that computed properties produce correct results, and that `to_dict()` serialization is stable.
+
+### Eval report schema consistency
+
+**What is tested:** The eval report serializer (`suite_report_payload`) produces output with a stable `schema_version` and consistent field structure. The report includes summary statistics, per-case results, assertion details, budget violations, and projected metrics.
+
+**Why it matters:** CI pipelines parse eval reports to make release-gating decisions. If the report schema changes, CI scripts break and deployments may be incorrectly blocked or allowed.
+
+**Test coverage:** Tests verify the report envelope structure, confirm that `schema_version` is set correctly, and validate that all expected fields are present and correctly typed.
+
+## Test categories
+
+| Category | Description | Key Modules Covered |
+| --- | --- | --- |
+| Agent delegation | Deterministic DAG execution, subagent routing, backpressure limits. | `afk.core.runtime`, `afk.agents.delegation` |
+| Queue contracts | Failure classification, retry behavior, dead-letter handling. | `afk.queues` |
+| Stream lifecycle | Event ordering, text delta capture, terminal event correctness. | `afk.core.streaming` |
+| Telemetry projection | Metric stability, computed property correctness, serialization. | `afk.observability.projectors`, `afk.observability.models` |
+| Eval reports | Report schema stability, assertion result structure, budget violations. | `afk.evals.reporting`, `afk.evals.models` |
+| Tool execution | Pydantic validation, timeout enforcement, hook/middleware chains. | `afk.tools` |
+| Policy evaluation | Rule matching, decision actions, audit event emission. | `afk.agents.policy` |
+| LLM runtime | Provider routing, retry/circuit-breaker behavior, streaming correctness. | `afk.llms.runtime` |
+| Security | Sandbox profile enforcement, secret scope isolation, command allowlists. | `afk.tools.security` |
+
+## Running the test suite
+
+Run all tests from the repository root:
+
+```bash
+PYTHONPATH=src pytest -q
+```
+
+Run a specific test category:
+
+```bash
+# Delegation and subagent tests
+PYTHONPATH=src pytest tests/core/ -q
+
+# Queue contract tests
+PYTHONPATH=src pytest tests/queues/ -q
+
+# Eval suite tests
+PYTHONPATH=src pytest tests/evals/ -q
+
+# Tool execution tests
+PYTHONPATH=src pytest tests/tools/ -q
+
+# Observability tests
+PYTHONPATH=src pytest tests/observability/ -q
+
+# LLM runtime tests
+PYTHONPATH=src pytest tests/llms/ -q
+```
+
+Run with verbose output for debugging:
+
+```bash
+PYTHONPATH=src pytest -v --tb=short
+```
+
+## Interpreting test results
+
+- **All tests pass**: The framework's behavioral contracts are intact. Safe to upgrade or deploy.
+- **A test fails**: A contract has been broken. The failure message identifies which guarantee was violated. Do not deploy until the contract is restored.
+- **A new test is marked as `xfail`**: The team has acknowledged a known limitation and documented the expected behavior.
+
+## Adding new tests
+
+When adding a new feature or fixing a bug, follow this pattern:
+
+1. **Identify the contract.** What behavioral guarantee should your change preserve or introduce? Write this as a plain-English statement (e.g., "Subagent timeout should produce a `SubagentExecutionRecord` with `success=False`").
+
+2. **Write the test first.** Create a test in the appropriate `tests/` subdirectory that asserts the expected behavior. Use descriptive test names that read as contract statements.
+
+3. **Make the test pass.** Implement the feature or fix. The test should pass without any special-casing or mocking of the behavior under test.
+
+4. **Verify stability.** Run the full suite to confirm your change does not break existing contracts.
+
+## CI pipeline guidance
+
+The AFK test suite is designed to run in CI without external dependencies. All tests use in-memory backends and mock LLM providers, so no API keys or infrastructure are required.
+
+Recommended CI configuration:
+
+```yaml
+# Example GitHub Actions step
+- name: Run AFK tests
+  run: |
+    pip install -e ".[dev]"
+    PYTHONPATH=src pytest -q --tb=short --junitxml=reports/test-results.xml
+  env:
+    PYTHONDONTWRITEBYTECODE: "1"
+```
+
+Store the JUnit XML report as a CI artifact for trend analysis and failure investigation.

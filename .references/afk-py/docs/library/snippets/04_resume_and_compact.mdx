@@ -1,0 +1,146 @@
+---
+title: "04: Resume and Compact"
+description: Resume interrupted runs from their last checkpoint and compact retained thread memory to control storage growth.
+---
+
+## What this snippet demonstrates
+
+Agent runs can be interrupted by timeouts, cancellations, infrastructure failures, or intentional pauses (such as waiting for human approval). When a run is interrupted, the runner persists a checkpoint containing the run's state at the point of interruption. The `resume()` method picks up from that checkpoint, restoring the conversation history, tool execution records, and step counter so the agent continues where it left off rather than starting from scratch.
+
+Over time, long-running threads accumulate checkpoint records, event logs, and state entries. The `compact_thread()` method prunes old records according to retention policies, keeping storage bounded without losing the data needed for active runs.
+
+## Resuming an interrupted run
+
+```python
+import asyncio
+from afk.agents import Agent
+from afk.core import Runner, RunnerConfig
+
+agent = Agent(
+    name="research-bot",
+    model="gpt-5.2-mini",
+    instructions="You help users research topics thoroughly.",
+)
+
+runner = Runner(config=RunnerConfig(interaction_mode="headless"))
+
+
+async def main():
+    # Start a run that might be interrupted
+    result = await runner.run(
+        agent,
+        user_message="Research the history of distributed systems.",
+        thread_id="thread_research_001",
+    )
+
+    # Save these identifiers for later resume
+    run_id = result.run_id
+    thread_id = result.thread_id
+    print(f"Run completed: state={result.state}")
+
+    # Later, resume from the checkpoint if the run was interrupted.
+    # The runner loads the latest checkpoint for this run_id + thread_id pair,
+    # restores the conversation state, and continues execution.
+    resumed_result = await runner.resume(
+        agent,
+        run_id=run_id,
+        thread_id=thread_id,
+    )
+    print(f"Resumed run: state={resumed_result.state}")
+    print(resumed_result.final_text)
+
+
+asyncio.run(main())
+```
+
+### How resume works internally
+
+The runner follows this sequence when `resume()` is called:
+
+1. **Checkpoint lookup** -- The runner queries the memory store for the latest checkpoint matching the given `run_id` and `thread_id`. If no checkpoint exists, it raises `AgentCheckpointCorruptionError`.
+
+2. **Terminal check** -- If the checkpoint already contains a terminal result (the run completed before the resume was requested), the runner returns that result immediately without re-executing.
+
+3. **Snapshot restoration** -- The runner loads the runtime snapshot from the checkpoint, which includes the conversation message history, step counter, tool execution records, and any pending subagent state.
+
+4. **Continued execution** -- The runner calls `run_handle()` internally with the restored snapshot, continuing the step loop from where it was interrupted.
+
+### Resume method signature
+
+```python
+await runner.resume(
+    agent,               # Agent definition (must match the original run's agent)
+    run_id="run_123",    # The run_id from the interrupted run
+    thread_id="th_abc",  # The thread_id from the interrupted run
+    context=None,        # Optional context overlay for resumed execution
+)
+```
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `agent` | `BaseAgent` | The agent definition used for continued execution. Must match the agent that started the original run. |
+| `run_id` | `str` | The unique run identifier from the interrupted run. Found on `result.run_id`. |
+| `thread_id` | `str` | The thread identifier from the interrupted run. Found on `result.thread_id`. |
+| `context` | `dict` or `None` | Optional context overlay. Merged with the original run context. |
+
+## Compacting thread memory
+
+```python
+import asyncio
+from afk.core import Runner, RunnerConfig
+from afk.memory import RetentionPolicy, StateRetentionPolicy
+
+runner = Runner(config=RunnerConfig(interaction_mode="headless"))
+
+
+async def compact():
+    compaction = await runner.compact_thread(
+        thread_id="thread_research_001",
+        event_policy=RetentionPolicy(max_age_ms=86_400_000),  # Keep last 24 hours
+        state_policy=StateRetentionPolicy(max_entries=50),     # Keep last 50 state entries
+    )
+    print(f"Events removed: {compaction.events_removed}")
+    print(f"States removed: {compaction.states_removed}")
+
+
+asyncio.run(compact())
+```
+
+### How compaction works
+
+Compaction operates on two dimensions of stored data:
+
+- **Event retention** -- Controlled by `RetentionPolicy`. Removes event records older than `max_age_ms`. Events are the raw telemetry log entries (LLM calls, tool executions, state transitions) that accumulate over the lifetime of a thread.
+
+- **State retention** -- Controlled by `StateRetentionPolicy`. Removes state entries that exceed `max_entries`, keeping only the most recent ones. State entries include checkpoint snapshots, conversation summaries, and key-value metadata.
+
+Both policies are optional. If you omit a policy, that dimension is not compacted. The method returns a `MemoryCompactionResult` with counts of removed records so you can log or alert on compaction activity.
+
+### When to compact
+
+- **After long conversations** -- Threads with hundreds of turns accumulate large checkpoint histories. Compact after the conversation ends or reaches a natural break point.
+- **On a schedule** -- Run compaction as a background task (e.g., hourly or daily) for threads that are still active but have grown large.
+- **Before resume** -- If you know a thread has extensive history, compacting before resume reduces the data the runner needs to load.
+
+## Error handling
+
+```python
+from afk.agents.errors import AgentCheckpointCorruptionError, AgentConfigurationError
+
+try:
+    result = await runner.resume(agent, run_id="invalid", thread_id="missing")
+except AgentCheckpointCorruptionError:
+    # No checkpoint found for this run_id + thread_id combination.
+    # This means either the run_id is wrong, the checkpoint was compacted away,
+    # or the memory store was cleared.
+    print("No checkpoint found -- cannot resume.")
+except AgentConfigurationError:
+    # run_id or thread_id is empty or invalid
+    print("Invalid run_id or thread_id.")
+```
+
+## What to read next
+
+- [Memory](/library/memory) -- Full memory architecture, checkpoint schema, and retention policies.
+- [Core Runner](/library/core-runner) -- Step loop lifecycle, state machine, and all runner API methods.
+- [Checkpoint Schema](/library/checkpoint-schema) -- Exact structure of checkpoint records stored in memory.

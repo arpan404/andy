@@ -1,0 +1,211 @@
+---
+title: Agents
+description: Define agents with instructions, tools, and subagents.
+---
+
+An **Agent** is a configuration object that describes _what_ your AI agent is — its identity, capabilities, and boundaries. Agents don't execute themselves; they're run by a [Runner](/library/core-runner).
+
+## Your first agent
+
+```python
+from afk.agents import Agent
+
+agent = Agent(
+    name="assistant",                          # ← Identity (used in logs, telemetry)
+    model="gpt-5.2-mini",                      # ← Which LLM to use
+    instructions="Be helpful and concise.",     # ← System prompt
+)
+```
+
+That's it. Three fields define a working agent. Everything else is optional.
+
+## Agent fields reference
+
+| Field              | Type                 | Default  | Purpose                                                         |
+| ------------------ | -------------------- | -------- | --------------------------------------------------------------- |
+| `model`            | `str` or `LLM`       | required | LLM model name or pre-built client instance                     |
+| `name`             | `str`                | `None`   | Agent identity for logs, telemetry, and subagent routing        |
+| `instructions`     | `str`                | `None`   | System prompt — what the agent knows and how it behaves         |
+| `instruction_file` | `str` or `Path`      | `None`   | Path to a `.txt` or `.md` file containing the system prompt     |
+| `prompts_dir`      | `str` or `Path`      | `None`   | Directory containing prompt files resolved by the prompt store  |
+| `tools`            | `list[tool]`         | `None`   | Typed functions the agent can call                              |
+| `subagents`        | `list[Agent]`        | `None`   | Specialist agents this agent can delegate to                    |
+| `skills`           | `list[str]`          | `None`   | Skill names to resolve from `skills_dir`                        |
+| `skills_dir`       | `str` or `Path`      | `".agents/skills"` | Directory containing skill packs                    |
+| `mcp_servers`      | `list[MCPServerLike]`| `None`   | MCP server configs for external tool discovery                  |
+| `fail_safe`        | `FailSafeConfig`     | defaults | Step limits, cost budgets, timeout, and failure policies        |
+| `context_defaults` | `dict`               | `None`   | Default JSON context merged into each run before caller context |
+| `inherit_context_keys` | `list[str]`      | `None`   | Context keys inherited from parent agent in delegation          |
+| `model_resolver`   | `callable`           | `None`   | Custom function to resolve model names to LLM clients           |
+| `instruction_roles` | `list[InstructionRole]` | `None` | Structured instruction sections with role-based ordering       |
+| `policy_roles`     | `list[PolicyRole]`   | `None`   | Role-based policy rules applied during execution                |
+| `policy_engine`    | `PolicyEngine`       | `None`   | Policy engine for tool/action gating                            |
+| `subagent_router`  | `SubagentRouter`     | `None`   | Custom routing logic for subagent delegation                    |
+| `max_steps`        | `int`                | `20`     | Maximum agent loop iterations                                   |
+| `tool_parallelism` | `int`                | `None`   | Max concurrent tool executions per step                         |
+| `subagent_parallelism_mode` | `str`       | `"configurable"` | How subagent concurrency is managed             |
+| `reasoning_enabled`| `bool`               | `None`   | Enable extended thinking / chain-of-thought                     |
+| `reasoning_effort` | `str`                | `None`   | Thinking effort level (e.g. `"low"`, `"medium"`, `"high"`)     |
+| `reasoning_max_tokens` | `int`            | `None`   | Token budget for extended thinking                              |
+| `skill_tool_policy`| `SkillToolPolicy`    | `None`   | Security policy for skill-provided tool execution               |
+| `enable_skill_tools` | `bool`             | `True`   | Whether to expose skill tools to the agent                      |
+| `enable_mcp_tools` | `bool`               | `True`   | Whether to expose MCP-discovered tools to the agent             |
+| `runner`           | `Runner`             | `None`   | Pre-bound runner instance (advanced usage)                      |
+
+## Single agent vs multi-agent
+
+<Tabs>
+  <Tab title="Single agent">
+    A single agent handles everything. Best for focused tasks.
+
+    ```python
+    agent = Agent(
+        name="classifier",
+        model="gpt-5.2-mini",
+        instructions="""
+        Classify the input into one of: positive, negative, neutral.
+        Output only the label.
+        """,
+    )
+
+    result = runner.run_sync(agent, user_message="I love this product!")
+    print(result.final_text)  # "positive"
+    ```
+
+    **Use when:** The task is well-defined and doesn't need specialized sub-expertise.
+
+  </Tab>
+  <Tab title="Multi-agent">
+    A coordinator delegates to specialist subagents.
+
+    ```python
+    researcher = Agent(
+        name="researcher",
+        model="gpt-5.2-mini",
+        instructions="Find relevant facts. Be thorough.",
+    )
+
+    writer = Agent(
+        name="writer",
+        model="gpt-5.2-mini",
+        instructions="Write clear, concise summaries.",
+    )
+
+    coordinator = Agent(
+        name="coordinator",
+        model="gpt-5.2-mini",
+        instructions="""
+        You manage a team:
+        - Delegate research to 'researcher'
+        - Delegate writing to 'writer'
+        Combine outputs into a final response.
+        """,
+        subagents=[researcher, writer],
+    )
+    ```
+
+    **Use when:** Different parts of the task need different expertise, models, or tools.
+
+  </Tab>
+</Tabs>
+
+## How subagent delegation works
+
+When an agent has subagents, AFK automatically generates transfer tools (`transfer_to_researcher`, `transfer_to_writer`). The coordinator calls these like any other tool.
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Coordinator
+    participant Researcher
+    participant Writer
+
+    User->>Coordinator: "Write a report on AI trends"
+    Coordinator->>Researcher: transfer_to_researcher("Find AI trends data")
+    Researcher-->>Coordinator: Research findings
+    Coordinator->>Writer: transfer_to_writer("Summarize these findings")
+    Writer-->>Coordinator: Written summary
+    Coordinator-->>User: Final combined report
+```
+
+Each subagent runs a **full agent loop** with its own model, instructions, and tools. The coordinator sees only the subagent's `final_text`.
+
+## Adding safety limits
+
+Every agent should have a `FailSafeConfig` in production:
+
+```python
+from afk.agents import Agent, FailSafeConfig
+
+agent = Agent(
+    name="safe-agent",
+    model="gpt-5.2-mini",
+    instructions="...",
+    tools=[...],
+    fail_safe=FailSafeConfig(
+        max_steps=15,              # Max agent loop iterations
+        max_llm_calls=10,          # Max LLM API calls
+        max_tool_calls=20,         # Max tool executions
+        max_wall_time_s=60.0,      # Max run duration in seconds
+        max_total_cost_usd=0.50,   # Max estimated cost
+
+        # What to do when things fail
+        llm_failure_policy="retry_then_degrade",         # "retry_then_fail" | "retry_then_degrade" | "fail_fast"
+        tool_failure_policy="continue_with_error",       # "continue_with_error" | "retry_then_continue" | "fail_run"
+        subagent_failure_policy="continue",               # "continue" | "retry_then_fail" | "skip_action"
+
+        # Fallback model chain for LLM resilience
+        fallback_model_chain=["gpt-5.2-mini", "gpt-5.2-nano"],
+    ),
+)
+```
+
+<Warning>
+  **Always set `max_total_cost_usd`** in production. A runaway agent loop can
+  spend significant API credits in minutes.
+</Warning>
+
+## Policy-aware agents
+
+Attach a [PolicyEngine](/library/security-model) to control what the agent can do:
+
+```python
+from afk.agents import Agent, PolicyEngine, PolicyRule
+
+policy = PolicyEngine(rules=[
+    PolicyRule(
+        rule_id="require-approval-for-writes",
+        condition=lambda event: event.tool_name and "write" in event.tool_name,
+        action="request_approval",
+        reason="Write operations need human approval",
+    ),
+    PolicyRule(
+        rule_id="deny-admin-tools",
+        condition=lambda event: event.tool_name and "admin" in event.tool_name,
+        action="deny",
+        reason="Admin tools are disabled in this environment",
+    ),
+])
+
+runner = Runner(policy_engine=policy)
+```
+
+Policy decisions: `allow` (default), `deny`, `request_approval` (human-in-the-loop), or `request_user_input`.
+
+## Design guidelines
+
+- **Start with one agent.** Only add subagents when you have clear evidence that the task needs specialized expertise.
+- **Keep instructions focused.** Vague instructions produce vague results. Tell the agent exactly what to do and what not to do.
+- **Use typed tools.** Every tool argument should be a Pydantic model. Untyped arguments bypass validation.
+- **Set cost limits early.** Add `FailSafeConfig` before your first deployment, not after your first runaway bill.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Core Runner" icon="play" href="/library/core-runner">
+    How agents are executed — lifecycle, API modes, and state management.
+  </Card>
+  <Card title="Tools" icon="wrench" href="/library/tools">
+    Define typed tool functions with validation and policy gates.
+  </Card>
+</CardGroup>
