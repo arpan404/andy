@@ -13,6 +13,7 @@ export interface CancellationToken {
 
 export class CancellationRegistry {
   readonly #tokens = new Map<string, CancellationToken>();
+  readonly #listeners = new Map<string, Set<(token: CancellationToken) => void>>();
 
   create(): Effect.Effect<CancellationToken> {
     return Effect.fn("CancellationRegistry.create")(() =>
@@ -43,6 +44,10 @@ export class CancellationRegistry {
           cancelledAt: new Date(),
         };
         this.#tokens.set(id, cancelled);
+        for (const listener of this.#listeners.get(id) ?? []) {
+          listener(cancelled);
+        }
+        this.#listeners.delete(id);
         return cancelled;
       }),
     )();
@@ -50,6 +55,27 @@ export class CancellationRegistry {
 
   get(id: string): CancellationToken | undefined {
     return this.#tokens.get(id);
+  }
+
+  waitForCancellation(id: string): Effect.Effect<CancellationToken> {
+    return Effect.async<CancellationToken>((resume) => {
+      const existing = this.#tokens.get(id);
+      if (existing?.status === "cancelled") {
+        resume(Effect.succeed(existing));
+        return;
+      }
+
+      const listener = (token: CancellationToken) => resume(Effect.succeed(token));
+      const listeners = this.#listeners.get(id) ?? new Set();
+      listeners.add(listener);
+      this.#listeners.set(id, listeners);
+      return Effect.sync(() => {
+        listeners.delete(listener);
+        if (listeners.size === 0) {
+          this.#listeners.delete(id);
+        }
+      });
+    });
   }
 }
 

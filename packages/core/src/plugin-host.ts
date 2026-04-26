@@ -35,8 +35,34 @@ import { stringifyCause } from "./utils.js";
 export interface PluginHostHandle {
   pluginId: string;
   executionMode: PluginExecutionMode;
+  health(): PluginHostHealth;
   stop(): Effect.Effect<void, PluginSandboxError>;
 }
+
+export type PluginHostHealth =
+  | {
+      status: "running";
+      pluginId: string;
+      executionMode: PluginExecutionMode;
+      startedAt: Date;
+    }
+  | {
+      status: "stopped";
+      pluginId: string;
+      executionMode: PluginExecutionMode;
+      startedAt: Date;
+      stoppedAt: Date;
+    }
+  | {
+      status: "crashed";
+      pluginId: string;
+      executionMode: PluginExecutionMode;
+      startedAt: Date;
+      crashedAt: Date;
+      exitCode?: number;
+      signal?: string;
+      reason: string;
+    };
 
 export interface WorkerPluginHostHandle extends PluginHostHandle {
   plugin: PluginDefinition;
@@ -71,6 +97,12 @@ export class TrustedInProcessPluginHost implements PluginHost {
     const self = this;
     return Effect.fn("TrustedInProcessPluginHost.start")(function* () {
       const executionMode: PluginExecutionMode = "trusted-in-process";
+      let health: PluginHostHealth = {
+        status: "running",
+        pluginId: plugin.id,
+        executionMode,
+        startedAt: new Date(),
+      };
       yield* self.#audit.record({
         type: "plugin.host.started",
         pluginId: plugin.id,
@@ -79,12 +111,25 @@ export class TrustedInProcessPluginHost implements PluginHost {
       const handle: PluginHostHandle = {
         pluginId: plugin.id,
         executionMode,
+        health: () => health,
         stop: () =>
-          self.#audit.record({
-            type: "plugin.host.stopped",
-            pluginId: plugin.id,
-            executionMode,
-          }),
+          Effect.sync(() => {
+            health = {
+              status: "stopped",
+              pluginId: plugin.id,
+              executionMode,
+              startedAt: health.startedAt,
+              stoppedAt: new Date(),
+            };
+          }).pipe(
+            Effect.zipRight(
+              self.#audit.record({
+                type: "plugin.host.stopped",
+                pluginId: plugin.id,
+                executionMode,
+              }),
+            ),
+          ),
       };
       return handle;
     })();
@@ -147,6 +192,12 @@ export class WorkerManifestPluginHost implements ManifestPluginHost {
       yield* validateManifestToolSandboxCompatibility(manifest, executionMode);
 
       const worker = new Worker(manifest.entry, { type: "module" });
+      let health: PluginHostHealth = {
+        status: "running",
+        pluginId: manifest.id,
+        executionMode,
+        startedAt: new Date(),
+      };
       worker.onmessage = (event: MessageEvent<unknown>) => {
         const message = event.data;
         if (!isWorkerPluginHostResponse(message)) {
@@ -165,6 +216,14 @@ export class WorkerManifestPluginHost implements ManifestPluginHost {
         pending.resolve(message);
       };
       worker.onerror = (event) => {
+        health = {
+          status: "crashed",
+          pluginId: manifest.id,
+          executionMode,
+          startedAt: health.startedAt,
+          crashedAt: new Date(),
+          reason: event.message,
+        };
         for (const [requestId, pending] of self.#pending.entries()) {
           self.#pending.delete(requestId);
           pending.reject(event);
@@ -185,8 +244,16 @@ export class WorkerManifestPluginHost implements ManifestPluginHost {
           executeTool: (toolName, input) =>
             self.#executeWorkerTool({ worker, manifest, toolName, input }),
         }),
+        health: () => health,
         stop: () =>
           Effect.sync(() => {
+            health = {
+              status: "stopped",
+              pluginId: manifest.id,
+              executionMode,
+              startedAt: health.startedAt,
+              stoppedAt: new Date(),
+            };
             worker.terminate();
             self.#workers.delete(manifest.id);
           }).pipe(
@@ -238,7 +305,14 @@ export class WorkerManifestPluginHost implements ManifestPluginHost {
             message: `Worker plugin '${options.manifest.id}' tool '${options.toolName}' failed.`,
             cause: stringifyCause(cause),
           }),
-      });
+      }).pipe(
+        Effect.onInterrupt(() =>
+          Effect.sync(() => {
+            self.#pending.delete(requestId);
+            options.worker.terminate();
+          }),
+        ),
+      );
 
       if (response.type === "andy.tool.error") {
         return yield* Effect.fail(
@@ -385,10 +459,29 @@ export class SubprocessManifestPluginHost implements ManifestPluginHost {
         env: createSandboxEnvironment({ manifest, sandbox }),
         stdio: ["pipe", "pipe", "pipe"],
       });
+      let health: PluginHostHealth = {
+        status: "running",
+        pluginId: manifest.id,
+        executionMode,
+        startedAt: new Date(),
+      };
+      let stopping = false;
       const stdout = createInterface({ input: child.stdout });
       stdout.on("line", (line) => self.#handleSubprocessLine(line, child, manifest));
       child.once("error", (error) => self.#rejectPending(error));
       child.once("exit", (code, signal) => {
+        if (!stopping) {
+          health = {
+            status: "crashed",
+            pluginId: manifest.id,
+            executionMode,
+            startedAt: health.startedAt,
+            crashedAt: new Date(),
+            ...(typeof code === "number" ? { exitCode: code } : {}),
+            ...(signal ? { signal } : {}),
+            reason: `Plugin subprocess exited with code ${String(code)} signal ${String(signal)}.`,
+          };
+        }
         self.#rejectPending(
           new Error(
             `Plugin subprocess '${manifest.id}' exited with code ${String(code)} signal ${String(signal)}.`,
@@ -411,15 +504,29 @@ export class SubprocessManifestPluginHost implements ManifestPluginHost {
           executeTool: (toolName, input) =>
             self.#executeSubprocessTool({ child, manifest, toolName, input }),
         }),
+        health: () => health,
         stop: () =>
-          stopSubprocessPlugin({
-            audit: self.#audit,
-            child,
-            executionMode,
-            manifest,
-            sandbox,
-            stdout,
-          }),
+          Effect.sync(() => {
+            stopping = true;
+            health = {
+              status: "stopped",
+              pluginId: manifest.id,
+              executionMode,
+              startedAt: health.startedAt,
+              stoppedAt: new Date(),
+            };
+          }).pipe(
+            Effect.zipRight(
+              stopSubprocessPlugin({
+                audit: self.#audit,
+                child,
+                executionMode,
+                manifest,
+                sandbox,
+                stdout,
+              }),
+            ),
+          ),
       };
       return handle;
     })();
@@ -551,7 +658,16 @@ export class SubprocessManifestPluginHost implements ManifestPluginHost {
               message: `Subprocess plugin '${options.manifest.id}' tool '${options.toolName}' failed.`,
               cause: stringifyCause(cause),
             }),
-        });
+        }).pipe(
+          Effect.onInterrupt(() =>
+            Effect.sync(() => {
+              self.#pending.delete(requestId);
+              if (!options.child.killed) {
+                options.child.kill("SIGTERM");
+              }
+            }),
+          ),
+        );
 
         if (response.type === "andy.tool.error") {
           return yield* Effect.fail(

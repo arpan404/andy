@@ -11,6 +11,7 @@ import {
 import { createRuntime, registerMemorySavePlugin } from "./test-helpers.js";
 import type { AiTextGenerationResult, LlmRequest, LlmRunner } from "./types.js";
 import type { LlmRunnerError } from "./errors.js";
+import { AgentSessionStore } from "./session-store.js";
 
 describe("AgentKernel", () => {
   test("runs model-planned tool calls through the runtime", async () => {
@@ -70,6 +71,42 @@ describe("AgentKernel", () => {
     if (result._tag === "Failure") {
       expect(String(result.cause)).toContain("AgentToolLimitExceededError");
     }
+  });
+
+  test("persists and resumes sessions through a session store", async () => {
+    const runtime = createRuntime([]);
+    const sessions = new AgentSessionStore();
+    const first = new AgentKernel({
+      runtime,
+      sessionStore: sessions,
+      audit: new ConsoleAuditSink(),
+      llm: new FakeLlmRunner([createFakeAiTextResult({ text: "First." })]),
+    });
+    await Effect.runPromise(
+      first.run({
+        sessionId: "session-1",
+        userMessage: "hello",
+      }),
+    );
+
+    const second = new AgentKernel({
+      runtime,
+      sessionStore: sessions,
+      audit: new ConsoleAuditSink(),
+      llm: new FakeLlmRunner([createFakeAiTextResult({ text: "Second." })]),
+    });
+    const result = await Effect.runPromise(
+      second.run({
+        sessionId: "session-1",
+        userMessage: "again",
+      }),
+    );
+
+    expect(sessions.list()).toHaveLength(1);
+    expect(
+      result.session.messages.filter((message) => message.role === "user"),
+    ).toHaveLength(2);
+    expect(result.response).toBe("Second.");
   });
 
   test("executes same-step tool calls in parallel and preserves result order", async () => {

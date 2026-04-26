@@ -7,10 +7,9 @@ import type { EventEnvelope } from "./events.js";
 import type { SecretReference } from "./secrets.js";
 import type { ApprovalActionDescriptor } from "./approval-resume.js";
 import { Effect } from "effect";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
 import { stringifyCause } from "./utils.js";
 import { CoreStateStoreError } from "./errors.js";
+import { AtomicJsonFileStore } from "./transactional-store.js";
 
 export interface CoreStateSnapshot {
   plugins: readonly PluginRuntimeRecord[];
@@ -48,58 +47,68 @@ export class InMemoryCoreStateStore implements CoreStateStore {
 
 export class JsonFileCoreStateStore implements CoreStateStore {
   readonly #path: string;
+  readonly #store: AtomicJsonFileStore<CoreStateSnapshot>;
 
   constructor(path: string) {
     this.#path = path;
+    this.#store = new AtomicJsonFileStore({
+      path,
+      schemaVersion: 1,
+      parse: normalizeCoreStateSnapshot,
+    });
   }
 
   save(snapshot: CoreStateSnapshot): Effect.Effect<void, CoreStateStoreError> {
     return Effect.fn("JsonFileCoreStateStore.save")(() =>
-      Effect.tryPromise({
-        try: async () => {
-          await mkdir(dirname(this.#path), { recursive: true });
-          await writeFile(this.#path, JSON.stringify(snapshot, null, 2), "utf8");
-        },
-        catch: (cause) =>
-          new CoreStateStoreError({
-            path: this.#path,
-            message: `Failed to save core state to '${this.#path}'.`,
-            cause: stringifyCause(cause),
-          }),
-      }),
+      this.#store.save(snapshot).pipe(
+        Effect.mapError(
+          (cause) =>
+            new CoreStateStoreError({
+              path: this.#path,
+              message: `Failed to save core state to '${this.#path}'.`,
+              cause: stringifyCause(cause),
+            }),
+        ),
+      ),
     )();
   }
 
   load(): Effect.Effect<CoreStateSnapshot | undefined, CoreStateStoreError> {
     return Effect.fn("JsonFileCoreStateStore.load")(() =>
-      Effect.tryPromise({
-        try: async () => {
-          try {
-            const text = await readFile(this.#path, "utf8");
-            return JSON.parse(text) as CoreStateSnapshot;
-          } catch (cause) {
-            if (isFileNotFound(cause)) {
-              return undefined;
-            }
-            throw cause;
-          }
-        },
-        catch: (cause) =>
-          new CoreStateStoreError({
-            path: this.#path,
-            message: `Failed to load core state from '${this.#path}'.`,
-            cause: stringifyCause(cause),
-          }),
-      }),
+      this.#store.load().pipe(
+        Effect.mapError(
+          (cause) =>
+            new CoreStateStoreError({
+              path: this.#path,
+              message: `Failed to load core state from '${this.#path}'.`,
+              cause: stringifyCause(cause),
+            }),
+        ),
+      ),
     )();
   }
 }
 
-function isFileNotFound(cause: unknown): boolean {
-  return (
-    typeof cause === "object" &&
-    cause !== null &&
-    "code" in cause &&
-    cause.code === "ENOENT"
-  );
+function normalizeCoreStateSnapshot(value: unknown): CoreStateSnapshot {
+  const record =
+    typeof value === "object" && value !== null
+      ? (value as Partial<CoreStateSnapshot>)
+      : {};
+  return {
+    plugins: Array.isArray(record.plugins) ? record.plugins : [],
+    sessions: Array.isArray(record.sessions) ? record.sessions : [],
+    approvals: Array.isArray(record.approvals) ? record.approvals : [],
+    backgroundJobs: Array.isArray(record.backgroundJobs) ? record.backgroundJobs : [],
+    ...(Array.isArray(record.auditTraces) ? { auditTraces: record.auditTraces } : {}),
+    ...(Array.isArray(record.events) ? { events: record.events } : {}),
+    ...(record.config && typeof record.config === "object"
+      ? { config: record.config as Record<string, unknown> }
+      : {}),
+    ...(Array.isArray(record.secretReferences)
+      ? { secretReferences: record.secretReferences }
+      : {}),
+    ...(Array.isArray(record.approvalActions)
+      ? { approvalActions: record.approvalActions }
+      : {}),
+  };
 }

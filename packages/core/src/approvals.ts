@@ -64,7 +64,7 @@ export class ApprovalManager {
             approvalId: request.id,
             channelId: input.communication.channelId,
             conversationId: input.communication.conversationId,
-            text: `Approval required for ${request.toolName}: ${request.reason}`,
+            text: `Approval required for ${request.toolName}: ${request.reason}\nApproval ID: ${request.id}\nReply with /approve ${request.id} or /deny ${request.id}.`,
             metadata: {
               runId: request.runId,
               toolName: request.toolName,

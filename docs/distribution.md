@@ -43,6 +43,21 @@ bun build --compile --target=bun --outfile=../../dist/andy ./src/index.ts
 - Plugin packages are still source/package artifacts loaded by Andy; the main user-facing daemon/CLI should be a binary.
 - Current subprocess plugins are launched with Bun by the plugin host. To fully remove the runtime requirement for plugin execution too, first-party plugins need to be compiled to binaries or loaded through an embedded worker/host path. The main Andy CLI/daemon binaries themselves do not require users to invoke Bun.
 
+## CLI Operations
+
+The compiled `dist/andy` binary can manage a running daemon:
+
+```bash
+./dist/andy status
+./dist/andy plugin list
+./dist/andy plugin install-local plugins/memory-markdown/plugin.json
+./dist/andy plugin install-github https://github.com/owner/plugin.git v0.1.0
+./dist/andy plugin enable andy.memory.markdown
+./dist/andy approval list
+```
+
+Use `--url http://host:port` or `ANDY_DAEMON_URL` to target a daemon that is not listening on `http://127.0.0.1:8765`.
+
 ## Validation
 
 Before shipping a binary:

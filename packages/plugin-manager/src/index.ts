@@ -4,12 +4,15 @@ import type {
   RiskLevel,
 } from "@andy/plugin-sdk";
 import { Effect, Schema } from "effect";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 
 export type PluginInstallSource =
   | {
       type: "github";
       repository: string;
       ref: string;
+      checkoutPath?: string;
     }
   | {
       type: "marketplace";
@@ -182,6 +185,15 @@ export class InMemoryPluginRegistry {
     )();
   }
 
+  hydrate(records: readonly InstalledPluginRecord[]): Effect.Effect<void> {
+    return Effect.sync(() => {
+      this.#records.clear();
+      for (const record of records) {
+        this.#records.set(record.manifest.id, normalizeRecordDates(record));
+      }
+    });
+  }
+
   #transition(
     pluginId: string,
     status: PluginLifecycleStatus,
@@ -200,6 +212,159 @@ export class InMemoryPluginRegistry {
       ),
     )();
   }
+}
+
+export class JsonFilePluginRegistry {
+  readonly #path: string;
+  readonly #delegate = new InMemoryPluginRegistry();
+  #loaded = false;
+
+  constructor(path: string) {
+    this.#path = path;
+  }
+
+  install(plan: PluginInstallPlan): Effect.Effect<InstalledPluginRecord, unknown> {
+    const self = this;
+    return Effect.fn("JsonFilePluginRegistry.install")(function* () {
+      yield* self.#loadOnce();
+      const record = yield* self.#delegate.install(plan);
+      yield* self.#save();
+      return record;
+    })();
+  }
+
+  enable(pluginId: string): Effect.Effect<InstalledPluginRecord, unknown> {
+    const self = this;
+    return Effect.fn("JsonFilePluginRegistry.enable")(function* () {
+      yield* self.#loadOnce();
+      const record = yield* self.#delegate.enable(pluginId);
+      yield* self.#save();
+      return record;
+    })();
+  }
+
+  disable(pluginId: string): Effect.Effect<InstalledPluginRecord, unknown> {
+    const self = this;
+    return Effect.fn("JsonFilePluginRegistry.disable")(function* () {
+      yield* self.#loadOnce();
+      const record = yield* self.#delegate.disable(pluginId);
+      yield* self.#save();
+      return record;
+    })();
+  }
+
+  remove(pluginId: string): Effect.Effect<InstalledPluginRecord, unknown> {
+    const self = this;
+    return Effect.fn("JsonFilePluginRegistry.remove")(function* () {
+      yield* self.#loadOnce();
+      const record = yield* self.#delegate.remove(pluginId);
+      yield* self.#save();
+      return record;
+    })();
+  }
+
+  upgrade(
+    plan: PluginInstallPlan,
+    approval: "approved" | "not-approved",
+  ): Effect.Effect<InstalledPluginRecord, unknown> {
+    const self = this;
+    return Effect.fn("JsonFilePluginRegistry.upgrade")(function* () {
+      yield* self.#loadOnce();
+      const record = yield* self.#delegate.upgrade(plan, approval);
+      yield* self.#save();
+      return record;
+    })();
+  }
+
+  get(pluginId: string): Effect.Effect<InstalledPluginRecord, unknown> {
+    const self = this;
+    return Effect.fn("JsonFilePluginRegistry.get")(function* () {
+      yield* self.#loadOnce();
+      return yield* self.#delegate.get(pluginId);
+    })();
+  }
+
+  list(): Effect.Effect<readonly InstalledPluginRecord[], unknown> {
+    const self = this;
+    return Effect.fn("JsonFilePluginRegistry.list")(function* () {
+      yield* self.#loadOnce();
+      return yield* self.#delegate.list();
+    })();
+  }
+
+  hydrate(records: readonly InstalledPluginRecord[]): Effect.Effect<void, unknown> {
+    const self = this;
+    return Effect.fn("JsonFilePluginRegistry.hydrate")(function* () {
+      self.#loaded = true;
+      yield* self.#delegate.hydrate(records);
+      yield* self.#save();
+    })();
+  }
+
+  #loadOnce(): Effect.Effect<void, unknown> {
+    const self = this;
+    return Effect.fn("JsonFilePluginRegistry.loadOnce")(function* () {
+      if (self.#loaded) {
+        return;
+      }
+      const records = yield* Effect.tryPromise({
+        try: async () => {
+          try {
+            const text = await readFile(self.#path, "utf8");
+            return parsePluginRegistryFile(JSON.parse(text));
+          } catch (cause) {
+            if (isFileNotFound(cause)) {
+              return [];
+            }
+            throw cause;
+          }
+        },
+        catch: (cause) => cause,
+      });
+      yield* self.#delegate.hydrate(records);
+      self.#loaded = true;
+    })();
+  }
+
+  #save(): Effect.Effect<void, unknown> {
+    const self = this;
+    return Effect.fn("JsonFilePluginRegistry.save")(function* () {
+      const plugins = yield* self.#delegate.list();
+      yield* Effect.tryPromise({
+        try: async () => {
+          await mkdir(dirname(self.#path), { recursive: true });
+          const tempPath = `${self.#path}.${process.pid}.${crypto.randomUUID()}.tmp`;
+          await writeFile(
+            tempPath,
+            `${JSON.stringify(
+              {
+                schemaVersion: 1,
+                plugins,
+              },
+              null,
+              2,
+            )}\n`,
+            "utf8",
+          );
+          await rename(tempPath, self.#path);
+        },
+        catch: (cause) => cause,
+      });
+    })();
+  }
+}
+
+function parsePluginRegistryFile(value: unknown): InstalledPluginRecord[] {
+  const record =
+    typeof value === "object" && value !== null
+      ? (value as { plugins?: unknown; value?: unknown })
+      : {};
+  const candidate = Array.isArray(record.plugins)
+    ? record.plugins
+    : typeof record.value === "object" && record.value !== null
+      ? (record.value as { plugins?: unknown }).plugins
+      : undefined;
+  return Array.isArray(candidate) ? candidate.map(normalizeRecordDates) : [];
 }
 
 function diffList(previous: string[], next: string[]): string[] {
@@ -240,4 +405,21 @@ function diffPermissions(
   }
 
   return changes.sort();
+}
+
+function normalizeRecordDates(record: InstalledPluginRecord): InstalledPluginRecord {
+  return {
+    ...record,
+    installedAt: new Date(record.installedAt),
+    updatedAt: new Date(record.updatedAt),
+  };
+}
+
+function isFileNotFound(cause: unknown): boolean {
+  return (
+    typeof cause === "object" &&
+    cause !== null &&
+    "code" in cause &&
+    cause.code === "ENOENT"
+  );
 }

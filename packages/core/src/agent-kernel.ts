@@ -17,12 +17,14 @@ import type {
   ToolExecutionResult,
 } from "./types.js";
 import { appendMessage } from "./utils.js";
+import { type AgentSessionStore, normalizeSessionDates } from "./session-store.js";
 
 export class AgentKernel {
   readonly #runtime: AgentRuntime;
   readonly #llm: LlmRunner;
   readonly #audit: AuditSink;
   readonly #cancellation: CancellationRegistry | undefined;
+  readonly #sessionStore: AgentSessionStore | undefined;
   readonly #sessions = new Map<string, AgentSession>();
 
   constructor(options: {
@@ -30,11 +32,13 @@ export class AgentKernel {
     llm: LlmRunner;
     audit: AuditSink;
     cancellation?: CancellationRegistry;
+    sessionStore?: AgentSessionStore;
   }) {
     this.#runtime = options.runtime;
     this.#llm = options.llm;
     this.#audit = options.audit;
     this.#cancellation = options.cancellation;
+    this.#sessionStore = options.sessionStore;
   }
 
   run(input: AgentRunInput): Effect.Effect<AgentRunResult, AgentKernelError> {
@@ -42,6 +46,9 @@ export class AgentKernel {
     const program = Effect.fn("AgentKernel.run")(function* () {
       let session = self.#createSession(input);
       self.#sessions.set(session.id, session);
+      if (self.#sessionStore) {
+        yield* self.#sessionStore.upsert(session);
+      }
       yield* self.#audit.record({
         type: "agent.session.started",
         sessionId: session.id,
@@ -103,6 +110,9 @@ export class AgentKernel {
       }
 
       self.#sessions.set(session.id, session);
+      if (self.#sessionStore) {
+        yield* self.#sessionStore.upsert(session);
+      }
       yield* self.#audit.record({
         type: "agent.session.completed",
         sessionId: session.id,
@@ -167,6 +177,13 @@ export class AgentKernel {
                 ...(options.session.cancellationTokenId
                   ? { cancellationTokenId: options.session.cancellationTokenId }
                   : {}),
+                ...(options.session.channelId
+                  ? { channelId: options.session.channelId }
+                  : {}),
+                ...(options.session.conversationId
+                  ? { conversationId: options.session.conversationId }
+                  : {}),
+                ...(options.session.userId ? { userId: options.session.userId } : {}),
               },
             );
             return {
@@ -182,11 +199,18 @@ export class AgentKernel {
   }
 
   getSession(sessionId: string): AgentSession | undefined {
-    return this.#sessions.get(sessionId);
+    return this.#sessions.get(sessionId) ?? this.#sessionStore?.get(sessionId);
   }
 
   listSessions(): readonly AgentSession[] {
-    return [...this.#sessions.values()].sort(
+    const sessions = new Map<string, AgentSession>();
+    for (const session of this.#sessionStore?.list() ?? []) {
+      sessions.set(session.id, session);
+    }
+    for (const session of this.#sessions.values()) {
+      sessions.set(session.id, session);
+    }
+    return [...sessions.values()].sort(
       (a, b) => a.createdAt.getTime() - b.createdAt.getTime(),
     );
   }
@@ -201,6 +225,32 @@ export class AgentKernel {
   }
 
   #createSession(input: AgentRunInput): AgentSession {
+    const existing =
+      input.sessionId &&
+      (this.#sessions.get(input.sessionId) ?? this.#sessionStore?.get(input.sessionId));
+    if (existing) {
+      const messages: AgentMessage[] = [...existing.messages];
+      if (
+        input.systemPrompt &&
+        !messages.some((message) => message.role === "system")
+      ) {
+        messages.unshift({ role: "system", content: input.systemPrompt });
+      }
+      messages.push({ role: "user", content: input.userMessage });
+      return {
+        ...existing,
+        messages,
+        ...(input.traceId ? { traceId: input.traceId } : {}),
+        ...(input.cancellationTokenId
+          ? { cancellationTokenId: input.cancellationTokenId }
+          : {}),
+        ...(input.channelId ? { channelId: input.channelId } : {}),
+        ...(input.conversationId ? { conversationId: input.conversationId } : {}),
+        ...(input.userId ? { userId: input.userId } : {}),
+        updatedAt: new Date(),
+      };
+    }
+
     const now = new Date();
     const messages: AgentMessage[] = [];
     if (input.systemPrompt) {
@@ -218,6 +268,9 @@ export class AgentKernel {
       ...(input.cancellationTokenId
         ? { cancellationTokenId: input.cancellationTokenId }
         : {}),
+      ...(input.channelId ? { channelId: input.channelId } : {}),
+      ...(input.conversationId ? { conversationId: input.conversationId } : {}),
+      ...(input.userId ? { userId: input.userId } : {}),
       createdAt: now,
       updatedAt: now,
     };
@@ -242,14 +295,6 @@ export class AgentKernel {
       }),
     );
   }
-}
-
-function normalizeSessionDates(session: AgentSession): AgentSession {
-  return {
-    ...session,
-    createdAt: new Date(session.createdAt),
-    updatedAt: new Date(session.updatedAt),
-  };
 }
 
 function applyOptionalTimeout<A, E, R>(

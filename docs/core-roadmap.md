@@ -9,7 +9,8 @@ Andy Core should stay small and trusted. It should provide the kernel, policy bo
 - Daemon app boots config, loads enabled plugin manifests through lifecycle, polls due background jobs, saves state, handles shutdown, and can be compiled with `bun run build:daemon-binary`.
 - AI SDK model provider package (`@andy/model-ai-sdk`) registers Vercel AI SDK models behind the core model-provider registry. Andy does not integrate with provider-native SDKs directly.
 - First-party system plugins now exist for Markdown memory, scoped filesystem access, approval-gated shell execution, Telegram, WhatsApp, voice input/output, vision, and computer-control capability surfaces.
-- Daemon remote control supports Telegram polling mode: inbound Telegram messages are normalized, published through the communication bridge, handled by an agent session using a configured AI SDK model provider, and replied to through the Telegram plugin.
+- Daemon remote control supports Telegram polling/webhook mode and WhatsApp webhook mode: inbound messages are normalized, published through the communication bridge, handled by an agent session using a configured AI SDK model provider, and replied to through the channel plugin.
+- Daemon HTTP ingress exposes health/status, approval list/decision endpoints, and Telegram/WhatsApp webhook endpoints with optional shared-secret verification.
 - Agent session kernel with AI SDK result types.
 - Bounded same-step tool-call execution with ordered tool-result messages.
 - Fully qualified internal tool names with ambiguity-safe local aliases.
@@ -57,6 +58,11 @@ Andy Core should stay small and trusted. It should provide the kernel, policy bo
 - Background executor runs due jobs through the normal runtime policy boundary and persists job progress.
 - Model provider registry keeps provider implementations behind the AI SDK runner interface.
 - Process isolation verifier can reject weak profiles when strong untrusted-plugin isolation is required.
+- Plugin manager now has a JSON-file registry for durable installed plugin records, preserving manifest, source, lifecycle status, and install/update timestamps across process restarts.
+- Daemon boot seeds that registry from config and starts enabled plugins from durable installed-plugin records instead of treating config paths as the only plugin database.
+- Plugin lifecycle stop disables runtime proxy tools, and restarting an already-managed plugin replaces the host handle without leaving stale callable tools.
+- Runtime tool execution checks cancellation tokens before executing a tool, so cancelled sessions/background jobs do not start new privileged actions.
+- Agent sessions, replayable event history, and trace contexts are hydrated from and saved into the core state snapshot.
 
 ## Needed Next
 
@@ -76,12 +82,7 @@ Still needed: richer usage/warning/final-message propagation from provider strea
 
 Core can create approval requests when policy returns `ask`, route approval prompts through the communication bridge, and park/resume the exact runtime tool action that was suspended.
 
-Still needed:
-
-- expire pending action
-- persist approvals across daemon restarts
-
-Pending approval expiry exists in memory. Runtime tool approvals now also record serializable action descriptors for restart-safe resume; non-tool custom closures remain in-memory only.
+Pending approval expiry exists in memory. Runtime tool approvals record serializable action descriptors for restart-safe resume; non-tool custom closures remain in-memory only. Approval prompts can route through communication channels when tool context includes a channel and conversation id.
 
 ### Plugin Host Isolation
 
@@ -104,16 +105,20 @@ Still needed: installer integration against real plugin packages.
 
 ### Durable State
 
-Core has in-memory and JSON file state store implementations. The daemon can hydrate approvals, restart-safe approval action descriptors, background jobs, and save runtime snapshots. It still needs durable stores for:
+Core has in-memory stores for tests and atomic JSON-file stores for the local daemon. The JSON stores write schema-versioned envelopes through temp-file rename so partial writes do not corrupt state.
 
-- installed plugin records
-- plugin lifecycle state
+The daemon now hydrates and saves:
+
+- installed plugin records and lifecycle state through `@andy/plugin-manager`
+- GitHub plugin checkouts under `.andy/github-plugins` for immutable commit SHA or semver release tag installs
 - agent sessions
+- approvals and restart-safe approval action descriptors
+- background jobs
 - audit traces
-- configuration
-- secret references
+- replayable audit/event envelopes
+- durable policy config from `.andy/policy.json`
 
-In-memory implementations are acceptable for tests only. JSON file storage is acceptable for early local daemon development, but production should move to a transactional store.
+JSON file storage is acceptable for the first local release. A later multi-user or marketplace host can replace these stores with SQLite or another transactional backend behind the same core store boundaries.
 
 ### Background Job Kernel
 
@@ -121,10 +126,9 @@ Core has initial background scheduling, cancellation ids, due-job lookup, progre
 
 Still needed:
 
-- durable resume behavior
 - persist richer task state
-- periodic daemon worker loop around the due-job executor
-- prevent stale elevated permissions
+- background-worker plugin depth for long-running product workflows
+- prevent stale elevated permissions with narrower grant scopes
 
 The actual long-running behaviors should still be plugins.
 
@@ -150,7 +154,7 @@ Needed providers still include Anthropic, Google, local models, and routing serv
 
 The first-party plugin packages are now real subprocess-hosted packages with manifests and lifecycle tests. Remaining depth is provider-specific:
 
-- WhatsApp needs daemon webhook HTTP ingress.
+- WhatsApp needs platform signature validation beyond the local shared-secret ingress guard.
 - Voice input needs a speech-to-text provider plugin and explicit microphone capture adapter.
 - Vision needs OCR and vision-model provider integration.
 - Computer control needs a richer accessibility adapter and cross-platform implementations.
@@ -179,7 +183,7 @@ This is required for debugging, safety review, and user trust.
 
 ### Cancellation And Timeouts
 
-Core has a cancellation token registry and timeout helper. Agent sessions can carry cancellation ids and model calls accept abort signals. These still need to be threaded into plugin subprocess cancellation, background job workers, and swarm child agents.
+Core has a cancellation token registry and timeout helper. Agent sessions can carry cancellation ids, model calls accept abort signals, and runtime tool execution refuses to start a tool when its cancellation token is already cancelled. These still need to be threaded into active plugin subprocess cancellation and swarm child agents.
 
 No plugin or child agent should run indefinitely without an inspectable state and cancellation path.
 

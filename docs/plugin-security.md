@@ -115,7 +115,22 @@ Rules:
 - Channel plugins normalize inbound messages into core communication messages.
 - Agent and approval replies go back through the communication bridge.
 - Approval prompts use the communication bridge so the same approval system can route to UI, Telegram, WhatsApp, desktop notifications, or future channels.
+- Remote approval prompts include an approval id and support `/approve <id>` and `/deny <id>` replies through channel plugins.
 - Plugins must not create their own hidden messaging path around the communication bridge.
+
+## Daemon HTTP Ingress
+
+The daemon exposes local HTTP ingress for health/status, approvals, and messaging webhooks:
+
+- `GET /health`
+- `GET /status`
+- `GET /approvals`
+- `POST /approvals/:id/approve`
+- `POST /approvals/:id/deny`
+- `POST /webhooks/telegram`
+- `POST /webhooks/whatsapp`
+
+Webhook routes can require `X-Andy-Webhook-Secret` by setting `http.webhookSecretEnv` to an environment variable name. Platform-specific signature validation should be added per channel where the platform supports it; the shared-secret guard is the local daemon baseline.
 
 ## Sandboxed Host API RPC
 
@@ -139,7 +154,44 @@ Pending approvals can be expired and cleared from the parked-action table. Runti
 
 Hosted plugins should be started through the core lifecycle manager. The manager starts the selected host, registers the hosted proxy tools with the runtime, audits lifecycle events, and stops handles during shutdown. If runtime registration fails, the host handle is stopped so plugin code is not left running without registered policy gates.
 
+Plugin hosts report health as `running`, `stopped`, or `crashed`. The daemon exposes host health in status output and can call lifecycle restart supervision through `POST /plugins/restart-crashed`. If restart fails, runtime proxy tools are disabled so crashed plugins do not remain callable.
+
 Plugin packages installed from a reviewed plan are materialized disabled by default. Enabling remains a separate lifecycle step so install, review, enable, and runtime execution stay distinct audit points.
+
+Stopping a hosted plugin disables its runtime proxy tools before the host handle is torn down. This prevents stopped plugin processes from leaving stale callable tools in the runtime catalog.
+
+The plugin manager includes a schema-versioned atomic JSON-file registry for local daemon development. Registry records preserve manifest, source, lifecycle status, install time, and update time. Daemon boot seeds this registry from config and starts enabled plugins from durable installed records.
+
+Runtime tool execution checks cancellation tokens before a tool starts and races active tool execution against cancellation. Hosted worker and subprocess calls are interrupted on active cancellation so cancelled sessions and background jobs do not keep privileged tool actions running.
+
+The daemon exposes local plugin management APIs:
+
+- `GET /plugins`
+- `POST /plugins/install-local`
+- `POST /plugins/install-github`
+- `POST /plugins/:id/enable`
+- `POST /plugins/:id/disable`
+- `POST /plugins/:id/remove`
+- `POST /plugins/restart-crashed`
+
+Local and GitHub install records are disabled unless explicitly enabled, and enable/disable/remove still flow through registry state, lifecycle state, runtime tool enablement, policy, and audit. GitHub installs require an immutable commit SHA or semver release tag, clone into `.andy/github-plugins`, and store the local checkout path in the registry so daemon startup never executes directly from a remote URL.
+
+The `andy` CLI binary wraps these local daemon APIs:
+
+- `andy plugin list`
+- `andy plugin install-local <manifestPath> [--enable]`
+- `andy plugin install-github <repository-url> <commit-or-version-tag> [--manifest plugin.json] [--enable]`
+- `andy plugin enable <pluginId>`
+- `andy plugin disable <pluginId>`
+- `andy plugin remove <pluginId>`
+- `andy plugin restart-crashed`
+- `andy approval list`
+- `andy approval approve <approvalId>`
+- `andy approval deny <approvalId>`
+
+The CLI defaults to `http://127.0.0.1:8765` and can target another daemon URL with `--url` or `ANDY_DAEMON_URL`.
+
+Policy config is durable in `.andy/policy.json`. It supports allowed capabilities, approval-required capabilities, denied plugins, approval-required channels, approval-required risk levels, explicit rules, and expiring grants scoped by plugin, capability, user, channel, or task.
 
 ## First-Party System Plugins
 

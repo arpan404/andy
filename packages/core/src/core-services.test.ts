@@ -29,6 +29,7 @@ import { createAndyDaemon } from "./daemon.js";
 import {
   SubprocessManifestPluginHost,
   WorkerManifestPluginHost,
+  type WorkerPluginHostHandle,
 } from "./plugin-host.js";
 import { verifyProcessIsolationProfile } from "./plugin-sandbox.js";
 
@@ -126,7 +127,8 @@ describe("core kernel services", () => {
 
   test("persists core state snapshots to JSON", async () => {
     const dir = await mkdtemp(join(tmpdir(), "andy-core-state-"));
-    const store = new JsonFileCoreStateStore(join(dir, "state.json"));
+    const path = join(dir, "state.json");
+    const store = new JsonFileCoreStateStore(path);
     await Effect.runPromise(
       store.save({
         plugins: [],
@@ -137,6 +139,7 @@ describe("core kernel services", () => {
     );
 
     const loaded = await Effect.runPromise(store.load());
+    const raw = JSON.parse(await readFile(path, "utf8")) as { schemaVersion?: unknown };
 
     expect(loaded).toEqual({
       plugins: [],
@@ -144,6 +147,7 @@ describe("core kernel services", () => {
       approvals: [],
       backgroundJobs: [],
     });
+    expect(raw.schemaVersion).toBe(1);
   });
 
   test("hydrates daemon approvals and background jobs from durable state", async () => {
@@ -282,6 +286,24 @@ describe("core kernel services", () => {
     expect(events).toEqual(["trace.started"]);
   });
 
+  test("hydrates durable event history with stable sequence numbers", async () => {
+    const bus = new InMemoryEventBus();
+    await Effect.runPromise(
+      bus.hydrate([
+        {
+          sequence: 10,
+          event: { type: "trace.started", traceId: "t1", name: "root" },
+          publishedAt: new Date(0),
+        },
+      ]),
+    );
+    await Effect.runPromise(
+      bus.publish({ type: "trace.completed", traceId: "t1", name: "root" }),
+    );
+
+    expect(bus.replay().map((event) => event.sequence)).toEqual([10, 11]);
+  });
+
   test("routes approval requests through the communication bridge", async () => {
     const audit = new ConsoleAuditSink();
     const communication = new CommunicationBridge({ audit });
@@ -314,6 +336,64 @@ describe("core kernel services", () => {
     expect(request.status).toBe("pending");
     expect(sent[0]).toContain("Approval required for shell.execute");
     expect(communication.listMessages().at(-1)?.kind).toBe("approval");
+  });
+
+  test("runtime approval-gated tools route prompts to channel context", async () => {
+    const audit = new ConsoleAuditSink();
+    const communication = new CommunicationBridge({ audit });
+    const approvals = new ApprovalManager({ audit, communication });
+    const sent: string[] = [];
+    await Effect.runPromise(
+      communication.registerChannel({
+        id: "telegram",
+        pluginId: "andy.messaging.telegram",
+        send(input) {
+          sent.push(input.text);
+          return Effect.succeed({ sent: true });
+        },
+      }),
+    );
+    const runtime = new AgentRuntime({
+      audit,
+      approvalManager: approvals,
+      policy: new CapabilityPolicy({
+        allowedCapabilities: new Set(["shell.execute"]),
+        approvalRequiredCapabilities: new Set(["shell.execute"]),
+      }),
+    });
+    await Effect.runPromise(
+      runtime.registerPlugin(
+        definePlugin({
+          id: "andy.shell",
+          name: "Shell",
+          version: "0.1.0",
+          capabilities: ["shell.execute"],
+          tools: [
+            defineTool({
+              name: "shell.execute",
+              description: "Execute shell commands.",
+              capabilities: ["shell.execute"],
+              risk: "critical",
+              execute() {
+                return Effect.succeed({ executed: true });
+              },
+            }),
+          ],
+        }),
+      ),
+    );
+
+    const result = await Effect.runPromiseExit(
+      runtime.executeTool(
+        "andy.shell.shell.execute",
+        { command: "date" },
+        { channelId: "telegram", conversationId: "chat-1" },
+      ),
+    );
+
+    expect(result._tag).toBe("Failure");
+    expect(sent[0]).toContain("Approval ID:");
+    expect(sent[0]).toContain("/approve");
   });
 
   test("resumes parked approval actions after approval", async () => {
@@ -580,6 +660,139 @@ describe("core kernel services", () => {
     expect(lifecycle.list()).toHaveLength(1);
     await Effect.runPromise(lifecycle.stop("andy.test.lifecycle"));
     expect(lifecycle.list()).toHaveLength(0);
+  });
+
+  test("lifecycle stop disables runtime proxy tools", async () => {
+    const audit = new ConsoleAuditSink();
+    const runtime = new AgentRuntime({
+      audit,
+      policy: new CapabilityPolicy({
+        allowedCapabilities: new Set(["test.echo"]),
+      }),
+    });
+    const lifecycle = new PluginLifecycleManager({
+      audit,
+      runtime,
+      host: new WorkerManifestPluginHost({ audit }),
+    });
+    await Effect.runPromise(
+      lifecycle.start({
+        id: "andy.test.disable-on-stop",
+        name: "Disable On Stop",
+        version: "0.1.0",
+        entry: new URL("./worker-plugin-fixture.ts", import.meta.url).href,
+        executionMode: "worker",
+        capabilities: ["test.echo"],
+        risk: "low",
+        tools: [
+          {
+            name: "test.echo",
+            description: "Echo input through the worker boundary.",
+            capabilities: ["test.echo"],
+            risk: "low",
+          },
+        ],
+      }),
+    );
+    await Effect.runPromise(lifecycle.stop("andy.test.disable-on-stop"));
+
+    const result = await Effect.runPromiseExit(
+      runtime.executeTool("andy.test.disable-on-stop.test.echo", { ok: true }),
+    );
+
+    expect(result._tag).toBe("Failure");
+    if (result._tag === "Failure") {
+      expect(String(result.cause)).toContain("PluginDisabledError");
+    }
+  });
+
+  test("lifecycle reports host health and restarts crashed handles", async () => {
+    const audit = new ConsoleAuditSink();
+    const runtime = new AgentRuntime({
+      audit,
+      policy: new CapabilityPolicy({
+        allowedCapabilities: new Set(["test.echo"]),
+      }),
+    });
+    let starts = 0;
+    const host = {
+      startManifest(manifest) {
+        starts += 1;
+        const startedAt = new Date();
+        const handle: WorkerPluginHostHandle = {
+          pluginId: manifest.id,
+          executionMode: "worker",
+          plugin: definePlugin({
+            id: manifest.id,
+            name: manifest.name,
+            version: manifest.version,
+            capabilities: manifest.capabilities,
+            tools: [
+              defineTool({
+                name: "test.echo",
+                description: "Echo input.",
+                capabilities: ["test.echo"],
+                risk: "low",
+                execute(input) {
+                  return Effect.succeed(input);
+                },
+              }),
+            ],
+          }),
+          health: () =>
+            starts === 1
+              ? {
+                  status: "crashed",
+                  pluginId: manifest.id,
+                  executionMode: "worker",
+                  startedAt,
+                  crashedAt: new Date(),
+                  reason: "test crash",
+                }
+              : {
+                  status: "running",
+                  pluginId: manifest.id,
+                  executionMode: "worker",
+                  startedAt,
+                },
+          stop: () => Effect.void,
+        };
+        return Effect.succeed(handle);
+      },
+    };
+    const lifecycle = new PluginLifecycleManager({
+      audit,
+      runtime,
+      host,
+    });
+
+    await Effect.runPromise(
+      lifecycle.start({
+        id: "andy.test.restart-crashed",
+        name: "Restart Crashed",
+        version: "0.1.0",
+        entry: "./fixture.ts",
+        executionMode: "worker",
+        capabilities: ["test.echo"],
+        risk: "low",
+        tools: [
+          {
+            name: "test.echo",
+            description: "Echo input.",
+            capabilities: ["test.echo"],
+            risk: "low",
+          },
+        ],
+      }),
+    );
+    expect(lifecycle.health()[0]?.status).toBe("crashed");
+
+    const result = await Effect.runPromise(lifecycle.restartCrashed());
+
+    expect(result).toEqual([
+      { pluginId: "andy.test.restart-crashed", status: "restarted" },
+    ]);
+    expect(lifecycle.health()[0]?.status).toBe("running");
   });
 
   test("lets sandboxed worker plugins request host APIs through RPC", async () => {

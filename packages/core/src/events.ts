@@ -26,6 +26,7 @@ export class InMemoryEventBus {
   readonly #handlers = new Set<EventHandler>();
   readonly #events: EventEnvelope[] = [];
   readonly #maxReplayEvents: number;
+  #nextSequence = 1;
 
   constructor(options: { maxReplayEvents?: number } = {}) {
     this.#maxReplayEvents = options.maxReplayEvents ?? 10_000;
@@ -35,10 +36,11 @@ export class InMemoryEventBus {
     return Effect.fn("InMemoryEventBus.publish")(() =>
       Effect.sync(() => {
         this.#events.push({
-          sequence: this.#events.length + 1,
+          sequence: this.#nextSequence,
           event,
           publishedAt: new Date(),
         });
+        this.#nextSequence += 1;
         while (this.#events.length > this.#maxReplayEvents) {
           this.#events.shift();
         }
@@ -76,6 +78,23 @@ export class InMemoryEventBus {
 
   replay(fromSequence = 1): readonly EventEnvelope[] {
     return this.#events.filter((event) => event.sequence >= fromSequence);
+  }
+
+  hydrate(events: readonly EventEnvelope[]): Effect.Effect<void> {
+    return Effect.sync(() => {
+      this.#events.length = 0;
+      this.#events.push(
+        ...events
+          .map((event) => ({
+            ...event,
+            publishedAt: new Date(event.publishedAt),
+          }))
+          .sort((a, b) => a.sequence - b.sequence)
+          .slice(-this.#maxReplayEvents),
+      );
+      this.#nextSequence =
+        Math.max(0, ...this.#events.map((event) => event.sequence)) + 1;
+    });
   }
 }
 

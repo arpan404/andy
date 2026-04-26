@@ -50,6 +50,9 @@ export interface AgentSession {
   messages: readonly AgentMessage[];
   traceId?: string;
   cancellationTokenId?: string;
+  userId?: string;
+  channelId?: string;
+  conversationId?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -86,6 +89,9 @@ export interface AgentRunInput {
   depth?: number;
   systemPrompt?: string;
   userMessage: string;
+  userId?: string;
+  channelId?: string;
+  conversationId?: string;
   maxToolCalls?: number;
   maxParallelToolCalls?: number;
   traceId?: string;

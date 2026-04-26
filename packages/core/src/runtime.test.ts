@@ -6,6 +6,7 @@ import { describe, expect, test } from "bun:test";
 import { AgentRuntime } from "./runtime.js";
 import { ApprovalManager } from "./approvals.js";
 import { ApprovalResumeEngine } from "./approval-resume.js";
+import { CancellationRegistry } from "./cancellation.js";
 import { createRuntime, registerMemorySavePlugin } from "./test-helpers.js";
 
 describe("AgentRuntime tool names", () => {
@@ -429,5 +430,107 @@ describe("AgentRuntime tool names", () => {
     );
 
     expect(invalid._tag).toBe("Failure");
+  });
+
+  test("does not start cancelled tool executions", async () => {
+    const cancellation = new CancellationRegistry();
+    const token = await Effect.runPromise(cancellation.create());
+    await Effect.runPromise(cancellation.cancel(token.id, "user stopped task"));
+    let executed = false;
+    const runtime = new AgentRuntime({
+      audit: new ConsoleAuditSink(),
+      cancellation,
+      policy: new CapabilityPolicy({
+        allowedCapabilities: new Set(["memory.save"]),
+      }),
+    });
+    await Effect.runPromise(
+      runtime.registerPlugin(
+        definePlugin({
+          id: "andy.cancel",
+          name: "Cancel Test",
+          version: "0.1.0",
+          capabilities: ["memory.save"],
+          tools: [
+            defineTool({
+              name: "memory.save",
+              description: "Save memory",
+              capabilities: ["memory.save"],
+              risk: "medium",
+              execute(input) {
+                executed = true;
+                return Effect.succeed({ saved: input });
+              },
+            }),
+          ],
+        }),
+      ),
+    );
+
+    const result = await Effect.runPromiseExit(
+      runtime.executeTool(
+        "andy.cancel.memory.save",
+        { key: "city" },
+        { cancellationTokenId: token.id },
+      ),
+    );
+
+    expect(result._tag).toBe("Failure");
+    expect(String(result)).toContain("ToolCancelledError");
+    expect(executed).toBe(false);
+  });
+
+  test("interrupts active tool execution when cancellation is requested", async () => {
+    const cancellation = new CancellationRegistry();
+    const token = await Effect.runPromise(cancellation.create());
+    let interrupted = false;
+    const runtime = new AgentRuntime({
+      audit: new ConsoleAuditSink(),
+      cancellation,
+      policy: new CapabilityPolicy({
+        allowedCapabilities: new Set(["memory.save"]),
+      }),
+    });
+    await Effect.runPromise(
+      runtime.registerPlugin(
+        definePlugin({
+          id: "andy.active-cancel",
+          name: "Active Cancel Test",
+          version: "0.1.0",
+          capabilities: ["memory.save"],
+          tools: [
+            defineTool({
+              name: "memory.save",
+              description: "Save memory slowly",
+              capabilities: ["memory.save"],
+              risk: "medium",
+              execute() {
+                return Effect.async((_resume) =>
+                  Effect.sync(() => {
+                    interrupted = true;
+                  }),
+                );
+              },
+            }),
+          ],
+        }),
+      ),
+    );
+
+    setTimeout(() => {
+      void Effect.runPromise(cancellation.cancel(token.id, "stop active tool"));
+    }, 10);
+
+    const result = await Effect.runPromiseExit(
+      runtime.executeTool(
+        "andy.active-cancel.memory.save",
+        { key: "city" },
+        { cancellationTokenId: token.id },
+      ),
+    );
+
+    expect(result._tag).toBe("Failure");
+    expect(String(result)).toContain("ToolCancelledError");
+    expect(interrupted).toBe(true);
   });
 });

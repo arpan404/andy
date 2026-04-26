@@ -27,6 +27,7 @@ import {
   ToolNotRegisteredError,
   ToolOutputSchemaInvalidError,
   ToolPolicyDeniedError,
+  ToolCancelledError,
 } from "./errors.js";
 import { ApprovalManager } from "./approvals.js";
 import type {
@@ -37,6 +38,7 @@ import { toAiSdkToolName } from "./ai-tools.js";
 import { createPluginHostApi } from "./host-api.js";
 import type { RuntimeToolRecord, ToolExecutionResult } from "./types.js";
 import { stringifyCause } from "./utils.js";
+import type { CancellationRegistry } from "./cancellation.js";
 
 export interface AgentRuntimeOptions {
   audit: AuditSink;
@@ -44,6 +46,7 @@ export interface AgentRuntimeOptions {
   scratchFs?: AgentFileSystem;
   approvalManager?: ApprovalManager;
   approvalResume?: ApprovalResumeEngine;
+  cancellation?: CancellationRegistry;
   hostPrivilegePolicy?: HostPrivilegePolicy;
   pluginStorageFactory?: (pluginId: string) => AgentFileSystem;
 }
@@ -53,6 +56,7 @@ export interface ToolExecutionContext {
   agentId?: string;
   userId?: string;
   channelId?: string;
+  conversationId?: string;
   taskId?: string;
   traceId?: string;
   cancellationTokenId?: string;
@@ -90,6 +94,7 @@ export class AgentRuntime {
   readonly #policy: PolicyEngine;
   readonly #approvalManager: ApprovalManager;
   readonly #approvalResume: ApprovalResumeEngine | undefined;
+  readonly #cancellation: CancellationRegistry | undefined;
   readonly #hostPrivilegePolicy: HostPrivilegePolicy;
   readonly #scratchFs: AgentFileSystem;
   readonly #pluginStorageFactory: (pluginId: string) => AgentFileSystem;
@@ -103,6 +108,7 @@ export class AgentRuntime {
     this.#approvalManager =
       options.approvalManager ?? new ApprovalManager({ audit: options.audit });
     this.#approvalResume = options.approvalResume;
+    this.#cancellation = options.cancellation;
     this.#hostPrivilegePolicy = options.hostPrivilegePolicy ?? {
       allowedPluginIds: new Set(),
       requireLocalSource: true,
@@ -306,6 +312,7 @@ export class AgentRuntime {
       }
 
       const runId = crypto.randomUUID();
+      yield* self.#ensureNotCancelled(toolName, context);
       yield* validateJsonSchema({
         toolName,
         phase: "input",
@@ -359,6 +366,14 @@ export class AgentRuntime {
           toolName,
           input,
           reason: decision.reason,
+          ...(context.channelId && context.conversationId
+            ? {
+                communication: {
+                  channelId: context.channelId,
+                  conversationId: context.conversationId,
+                },
+              }
+            : {}),
         });
         if (self.#approvalResume) {
           yield* self.#approvalResume.park(
@@ -395,6 +410,7 @@ export class AgentRuntime {
         );
       }
 
+      yield* self.#ensureNotCancelled(toolName, context);
       return yield* self.#executeRegisteredTool({
         plugin,
         registeredTool,
@@ -416,7 +432,7 @@ export class AgentRuntime {
   }): Effect.Effect<ToolExecutionResult, AgentRuntimeError> {
     const self = this;
     return Effect.fn("AgentRuntime.executeRegisteredTool")(function* () {
-      const output = yield* options.registeredTool.definition.execute(options.input, {
+      const execute = options.registeredTool.definition.execute(options.input, {
         pluginId: options.registeredTool.pluginId,
         runId: options.runId,
         host: createPluginHostApi({
@@ -430,6 +446,12 @@ export class AgentRuntime {
         storageFs: options.plugin.storageFs,
         scratchFs: self.#scratchFs,
       });
+
+      const output = yield* self.#interruptOnCancellation(
+        options.toolName,
+        options.context ?? {},
+        execute,
+      );
 
       yield* validateJsonSchema({
         toolName: options.toolName,
@@ -548,6 +570,54 @@ export class AgentRuntime {
     }
 
     return Effect.succeed(this.#tools.get(qualifiedName));
+  }
+
+  #ensureNotCancelled(
+    toolName: string,
+    context: ToolExecutionContext,
+  ): Effect.Effect<void, ToolCancelledError> {
+    const tokenId = context.cancellationTokenId;
+    if (!tokenId || !this.#cancellation) {
+      return Effect.void;
+    }
+    const token = this.#cancellation.get(tokenId);
+    if (token?.status !== "cancelled") {
+      return Effect.void;
+    }
+    return Effect.fail(
+      new ToolCancelledError({
+        toolName,
+        cancellationTokenId: tokenId,
+        ...(token.reason ? { reason: token.reason } : {}),
+        message: `Tool '${toolName}' was cancelled before execution.`,
+      }),
+    );
+  }
+
+  #interruptOnCancellation(
+    toolName: string,
+    context: ToolExecutionContext,
+    effect: Effect.Effect<JsonValue, AgentRuntimeError>,
+  ): Effect.Effect<JsonValue, AgentRuntimeError> {
+    const tokenId = context.cancellationTokenId;
+    if (!tokenId || !this.#cancellation) {
+      return effect;
+    }
+
+    const cancellation = this.#cancellation.waitForCancellation(tokenId).pipe(
+      Effect.flatMap((token) =>
+        Effect.fail(
+          new ToolCancelledError({
+            toolName,
+            cancellationTokenId: tokenId,
+            ...(token.reason ? { reason: token.reason } : {}),
+            message: `Tool '${toolName}' was cancelled during execution.`,
+          }),
+        ),
+      ),
+    );
+
+    return Effect.raceFirst(effect, cancellation);
   }
 }
 

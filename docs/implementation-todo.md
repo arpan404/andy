@@ -9,11 +9,21 @@ This list tracks the first production path now that the core kernel is ready eno
 3. Build a real daemon app that boots config, installed plugins, background polling, and shutdown. Done.
 4. Ship the daemon/CLI as a standalone binary so users do not need Bun or another JS runtime. CLI and daemon binary scripts are in place; plugin subprocesses still need a no-runtime strategy.
 5. Add OpenAI as the first model provider package/plugin. Done.
-6. Build Telegram remote-control flow through the communication bridge. Done for polling mode.
-7. Build WhatsApp remote-control flow through the communication bridge. Plugin normalization/send tools are done; daemon webhook server is still pending.
+6. Build Telegram remote-control flow through the communication bridge. Done for polling and webhook ingress.
+7. Build WhatsApp remote-control flow through the communication bridge. Done for webhook ingress.
 8. Build filesystem plugin with scoped read/write/list/delete. Done.
 9. Build shell plugin with approval-gated execution. Done.
 10. Build voice, vision, and computer-control plugins behind strict manifests. Done for first subprocess tool surfaces; native provider depth remains incremental.
+11. Complete core storage, plugin management, host supervision, active cancellation, and durable policy config. Done.
+12. Add binary CLI commands for daemon status, plugin management, and approval decisions. Done.
+
+## Core Completion Todo
+
+1. Transactional storage layer. Done.
+2. Plugin install/enable/disable/remove API. Done for local manifest installs, GitHub immutable-ref installs, and lifecycle mutation over daemon HTTP.
+3. Plugin host crash/restart supervision. Done.
+4. Active cancellation propagation for in-flight tool execution. Done.
+5. Durable policy config and expiring grants. Done.
 
 ## Rules
 
@@ -24,6 +34,26 @@ This list tracks the first production path now that the core kernel is ready eno
 - User-facing release artifacts should be standalone binaries. Users should not need Bun, Node, or another JavaScript runtime.
 
 ## Completed
+
+### Core Plugin And Tool Execution Hardening
+
+- Core state now saves through an atomic JSON envelope with a schema version and temp-file rename.
+- Plugin registry JSON now saves through a schema-versioned atomic write.
+- Daemon writes and reads durable policy config from `.andy/policy.json`.
+- Daemon HTTP now exposes `GET /plugins`, `POST /plugins/install-local`, `POST /plugins/install-github`, `POST /plugins/:id/enable`, `POST /plugins/:id/disable`, `POST /plugins/:id/remove`, and `POST /plugins/restart-crashed`.
+- GitHub plugin installs clone immutable commit SHA or semver release tag refs into `.andy/github-plugins`, load the manifest from the checkout, and persist the checkout path in the installed-plugin registry.
+- CLI now exposes daemon-backed plugin commands for list, local install, GitHub install, enable, disable, remove, restart crashed hosts, and approval list/approve/deny.
+- Plugin lifecycle reports host health and can restart crashed plugin hosts; failed restarts disable runtime proxy tools.
+- Active runtime cancellation races in-flight tool effects and interrupts hosted worker/subprocess calls.
+- Policy config supports per-plugin/channel/risk rules and expiring grants.
+- Added a durable JSON-file plugin registry in `@andy/plugin-manager`.
+- Installed plugin records now persist manifest, source, lifecycle status, install time, and update time.
+- Daemon boot now seeds the registry from config and starts enabled plugins from installed-plugin records.
+- Plugin lifecycle stop now disables runtime proxy tools so stopped plugin handles are not still callable.
+- Plugin lifecycle start replaces an already-running handle before starting the new one.
+- Runtime tool execution now checks cancellation tokens before executing tools.
+- Agent sessions, replayable audit/event history, and trace contexts now hydrate from and save to the core state snapshot.
+- Added focused tests for durable plugin registry, lifecycle stop behavior, durable events, session persistence, and cancelled tool execution.
 
 ### `memory-markdown`
 
@@ -67,3 +97,11 @@ This list tracks the first production path now that the core kernel is ready eno
 - Daemon config now includes `remoteControl.telegram`.
 - When enabled, the daemon polls `telegram.listen`, publishes inbound messages to `CommunicationBridge`, runs an agent session through the selected AI SDK model provider, and sends the response through `telegram.sendMessage`.
 - Remote control is disabled by default because it requires credentials, enabled Telegram plugin manifest, and an enabled model provider.
+
+### HTTP Ingress And Remote Approvals
+
+- Daemon HTTP server now exposes `GET /health`, `GET /status`, `GET /approvals`, `POST /approvals/:id/approve`, and `POST /approvals/:id/deny`.
+- Webhook ingress exists at `POST /webhooks/telegram` and `POST /webhooks/whatsapp`.
+- Webhook requests can be protected with `X-Andy-Webhook-Secret` using the configured `http.webhookSecretEnv`.
+- Telegram and WhatsApp inbound messages are normalized, published through `CommunicationBridge`, and can drive agent sessions when the channel remote-control config is enabled.
+- Approval-gated tool calls now carry `channelId` and `conversationId`, so approval prompts route back through Telegram/WhatsApp with `/approve <id>` and `/deny <id>` commands.

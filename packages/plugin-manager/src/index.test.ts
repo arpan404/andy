@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { Effect } from "effect";
-import { createInstallPlan, InMemoryPluginRegistry } from "./index.js";
+import { mkdtemp, readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import {
+  createInstallPlan,
+  InMemoryPluginRegistry,
+  JsonFilePluginRegistry,
+} from "./index.js";
 
 describe("createInstallPlan", () => {
   test("flags new capabilities and permissions for approval", () => {
@@ -106,5 +113,35 @@ describe("InMemoryPluginRegistry", () => {
     if (result._tag === "Failure") {
       expect(String(result.cause)).toContain("PluginUpgradeRequiresApprovalError");
     }
+  });
+});
+
+describe("JsonFilePluginRegistry", () => {
+  test("persists installed plugin lifecycle records", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "andy-plugin-registry-"));
+    const path = join(dir, "plugins.json");
+    const source = { type: "local" as const, path: "./plugins/example" };
+    const manifest = {
+      id: "andy.example",
+      name: "Example",
+      version: "0.1.0",
+      entry: "./dist/index.js",
+      capabilities: ["memory.save"],
+      risk: "medium" as const,
+    };
+
+    const registry = new JsonFilePluginRegistry(path);
+    await Effect.runPromise(registry.install(createInstallPlan(source, manifest)));
+    await Effect.runPromise(registry.enable("andy.example"));
+
+    const reloaded = new JsonFilePluginRegistry(path);
+    const [record] = await Effect.runPromise(reloaded.list());
+
+    expect(record?.manifest.id).toBe("andy.example");
+    expect(record?.status).toBe("enabled");
+    expect(record?.installedAt).toBeInstanceOf(Date);
+    expect(JSON.parse(await readFile(path, "utf8"))).toEqual(
+      expect.objectContaining({ schemaVersion: 1 }),
+    );
   });
 });

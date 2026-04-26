@@ -45,8 +45,10 @@
         "@andy/audit": "workspace:*",
         "@andy/core": "workspace:*",
         "@andy/model-ai-sdk": "workspace:*",
+        "@andy/plugin-manager": "workspace:*",
         "@andy/plugin-sdk": "workspace:*",
         "@andy/policy": "workspace:*",
+        "@andy/types": "workspace:*",
         "effect": "^3.21.2",
       },
       "devDependencies": {
@@ -145,6 +147,7 @@
       "dependencies": {
         "@andy/plugin-sdk": "workspace:*",
         "@andy/types": "workspace:*",
+        "effect": "^3.21.2",
       },
       "devDependencies": {
         "typescript": "^5.9.3",

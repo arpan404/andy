@@ -25,6 +25,7 @@ export interface ApprovalActionDescriptor {
     agentId?: string;
     userId?: string;
     channelId?: string;
+    conversationId?: string;
     taskId?: string;
     traceId?: string;
     cancellationTokenId?: string;
