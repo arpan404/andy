@@ -16,10 +16,7 @@ const corePlugin = definePlugin({
       capabilities: ["agent.respond"],
       risk: "low",
       async execute(input: { message: string }, context) {
-        await context.scratchFs.writeFile(
-          "last-message.txt",
-          input.message.trim(),
-        );
+        await context.scratchFs.writeFile("last-message.txt", input.message.trim());
 
         return {
           message:

@@ -1,0 +1,15 @@
+{
+  "id": "andy.computer-control",
+  "name": "Computer Control",
+  "version": "0.1.0",
+  "entry": "./dist/index.js",
+  "capabilities": [
+    "computer.mouse",
+    "computer.keyboard",
+    "computer.window",
+    "computer.app",
+    "computer.accessibility_tree",
+    "screen.capture"
+  ],
+  "risk": "critical"
+}

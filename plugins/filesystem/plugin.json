@@ -3,10 +3,6 @@
   "name": "Filesystem",
   "version": "0.1.0",
   "entry": "./dist/index.js",
-  "capabilities": [
-    "filesystem.read",
-    "filesystem.write",
-    "filesystem.delete"
-  ],
+  "capabilities": ["filesystem.read", "filesystem.write", "filesystem.delete"],
   "risk": "medium"
 }

@@ -1,0 +1,8 @@
+{
+  "id": "andy.voice.output",
+  "name": "Voice Output",
+  "version": "0.1.0",
+  "entry": "./dist/index.js",
+  "capabilities": ["voice.speak", "speaker.speak"],
+  "risk": "medium"
+}

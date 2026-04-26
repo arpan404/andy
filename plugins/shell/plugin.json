@@ -3,8 +3,6 @@
   "name": "Shell",
   "version": "0.1.0",
   "entry": "./dist/index.js",
-  "capabilities": [
-    "shell.execute"
-  ],
+  "capabilities": ["shell.execute"],
   "risk": "high"
 }

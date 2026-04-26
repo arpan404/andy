@@ -1,0 +1,8 @@
+{
+  "id": "andy.vision",
+  "name": "Vision",
+  "version": "0.1.0",
+  "entry": "./dist/index.js",
+  "capabilities": ["camera.read", "screen.capture", "screen.ocr", "screen.describe"],
+  "risk": "high"
+}

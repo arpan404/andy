@@ -12,12 +12,18 @@
   "scripts": {
     "andy": "bun run --filter @andy/cli dev",
     "build": "bun run --filter './packages/*' build && bun run --filter './apps/*' build",
-    "check": "bun run --filter './packages/*' check && bun run --filter './apps/*' check",
+    "check": "bun run lint && bun run fmt:check && bun run typecheck && bun run test",
     "dev": "bun run --filter @andy/cli dev",
-    "test": "bun test packages"
+    "fmt": "prettier --write .",
+    "fmt:check": "prettier --check .",
+    "lint": "biome lint .",
+    "test": "bun test packages",
+    "typecheck": "bun run --filter './packages/*' check && bun run --filter './apps/*' check"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.4.13",
     "@types/node": "^25.0.0",
+    "prettier": "^3.8.3",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   },

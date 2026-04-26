@@ -1,0 +1,8 @@
+{
+  "id": "andy.background-worker",
+  "name": "Background Worker",
+  "version": "0.1.0",
+  "entry": "./dist/index.js",
+  "capabilities": ["background.run", "background.schedule", "background.cancel"],
+  "risk": "high"
+}

@@ -1,5 +1,9 @@
 import type { AuditSink } from "@andy/audit";
-import type { PluginDefinition, ToolDefinition } from "@andy/plugin-sdk";
+import {
+  assertManifestBoundPlugin,
+  type PluginDefinition,
+  type ToolDefinition,
+} from "@andy/plugin-sdk";
 import type { PolicyEngine } from "@andy/policy";
 import { createScratchFileSystem, type AgentFileSystem } from "@andy/vfs";
 
@@ -32,6 +36,8 @@ export class AgentRuntime {
   }
 
   registerPlugin(plugin: PluginDefinition): void {
+    assertManifestBoundPlugin(plugin);
+
     for (const tool of plugin.tools) {
       if (this.#tools.has(tool.name)) {
         throw new Error(`Tool '${tool.name}' is already registered.`);

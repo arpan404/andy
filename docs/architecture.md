@@ -18,7 +18,7 @@ The core runtime owns the minimal trusted path:
 
 Everything with operational power should live behind a plugin boundary.
 
-Core must not grow channel-specific features. WhatsApp, Telegram, voice, vision, filesystem access, shell access, browser control, memory providers, and model providers are plugins.
+Core must not grow channel-specific features. WhatsApp, Telegram, voice, vision, computer control, background workers, notifications, filesystem access, shell access, browser control, memory providers, and model providers are plugins.
 
 ## Execution Flow
 
@@ -44,6 +44,45 @@ Plugins declare:
 - typed input and output schemas in later iterations
 
 The runtime never calls undeclared capabilities directly.
+
+## Plugin Installation And Sandboxing
+
+Users must be able to install plugins from GitHub in the first release. Marketplace support can come later, but the install model should already support source provenance, version pinning, capability review, and future signing.
+
+```text
+plugin source
+  -> fetch manifest
+  -> validate schema
+  -> review capabilities and permissions
+  -> pin source ref
+  -> install package
+  -> disabled by default or enabled with approval
+  -> execute through sandboxed plugin host
+```
+
+All installed plugins are untrusted by default. A manifest is not a grant of permission; it is the maximum capability envelope the plugin is allowed to request. The policy engine still decides whether a specific action is allowed, denied, or requires approval.
+
+Manifest-bound execution rules:
+
+- Plugin tools cannot request capabilities outside the plugin manifest.
+- Runtime rejects undeclared capabilities during plugin registration.
+- Plugin context exposes only approved host APIs.
+- Filesystem access goes through `@andy/vfs` or scoped filesystem plugins.
+- Network access must be allowlisted.
+- Secrets come only from a secret broker.
+- Plugin upgrades cannot silently gain new capabilities.
+- Every install, enable, upgrade, permission change, and tool call is audited.
+
+Sandbox levels:
+
+- `metadata`: manifest inspection only
+- `trusted-in-process`: first-party development only
+- `subprocess`: default installed-plugin target
+- `worker`: restricted JS worker
+- `container`: stronger high-risk isolation later
+- `remote`: isolated remote execution later
+
+GitHub installs should pin to a commit SHA or immutable release tag. Marketplace installs should later add signing, review metadata, reputation, and automated security scans.
 
 ## Messaging
 
@@ -71,6 +110,35 @@ First-party messaging plugins:
 - `andy.messaging.telegram`
 
 Use official platform APIs for first-party plugins. Do not use unofficial WhatsApp automation or browser-session scraping for first release.
+
+## Multimodal Control
+
+Andy must support vision, computer control, voice input/output, and background execution as first-class product capabilities. They remain plugins, not core features.
+
+Required first-class plugins:
+
+- `andy.vision`
+- `andy.computer-control`
+- `andy.voice.input`
+- `andy.voice.output`
+- `andy.background-worker`
+- `andy.notifications`
+
+These plugins should compose through the agent runtime:
+
+```text
+voice / message / UI input
+  -> agent session
+  -> planner
+  -> vision or screen inspection
+  -> computer/browser/system action
+  -> background continuation if needed
+  -> notification or voice/message response
+```
+
+Computer control is high risk because it can act on behalf of the user across apps. Mouse, keyboard, window control, app launching, screen capture, and accessibility-tree access must be capability-scoped, policy-checked, and audited.
+
+Background work is also high risk because time separates user intent from execution. Background jobs must persist task state, support cancellation, re-check policy before each tool action, and surface approval requests through notification or messaging plugins.
 
 ## Virtual Filesystem
 

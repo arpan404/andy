@@ -1,0 +1,8 @@
+{
+  "id": "andy.voice.input",
+  "name": "Voice Input",
+  "version": "0.1.0",
+  "entry": "./dist/index.js",
+  "capabilities": ["voice.listen", "voice.transcribe", "microphone.read"],
+  "risk": "high"
+}
