@@ -30,6 +30,22 @@ Every product feature must be implemented as a plugin or as a minimal core inter
 - Do not introduce new ad hoc async/throw/catch flows when an Effect error channel can model the failure.
 - Keep `@effect/language-service` configured in TypeScript.
 
+## Maintainability
+
+- Do not put broad runtime systems into one large file.
+- Split code by responsibility: runtime, agent kernel, LLM runner, policy, plugin host, background scheduling, swarm coordination, errors, and shared types should live in separate modules.
+- Keep package `src/index.ts` files as small public export barrels unless there is a clear reason otherwise.
+- Prefer focused files with explicit imports over dense cross-cutting modules.
+- When a file starts mixing unrelated responsibilities, split it before adding more behavior.
+
+## Documentation
+
+- Any discussed, planned, or implemented product feature must be documented under `docs/`.
+- Update the relevant existing document when the topic already exists, such as `docs/architecture.md` or `docs/plugin-security.md`.
+- Create a focused new document under `docs/` when the feature introduces a new area that does not fit an existing page.
+- Documentation updates should cover the intent, architecture boundary, plugin/capability impact, policy/security implications, and validation expectations where relevant.
+- Do not mark feature work complete until the matching docs update is done.
+
 ## Product Direction
 
 Andy should feel like a secure, extensible Jarvis-style agent system: voice-aware, vision-aware, computer-controlling, background-capable, externally connected, observable, and powerful enough to control local and external systems through explicit permissions.
@@ -37,8 +53,10 @@ Andy should feel like a secure, extensible Jarvis-style agent system: voice-awar
 The core design principle is:
 
 ```text
-Andy Core = secure agent kernel + plugin runtime + policy engine
-Everything else = plugin
+Andy Core = secure agent kernel + plugin runtime + policy engine + syscall surface
+First-party plugins = system software
+User-installed plugins = application software
+Everything with product capability = plugin
 ```
 
 This is a hard architectural rule. Voice is a plugin. Vision is a plugin. Messaging apps are plugins. Filesystem access is a plugin. Shell/system control is a plugin. Browser automation is a plugin. External SaaS integrations are plugins. Memory providers are plugins. Model providers are plugins. UI surfaces should integrate through stable core APIs and may have their own app packages, but channel-specific behavior still belongs in plugins.
@@ -51,15 +69,27 @@ The trusted core should stay small:
 
 - agent sessions and task lifecycle
 - model routing and LLM call abstraction
+- agent kernel loop: messages, tool requests, tool-result feedback, final response
+- multi-agent kernel coordination with explicit limits
 - plugin discovery and registration
+- plugin lifecycle state: install, enable, disable, remove, upgrade-review
 - capability registry
 - tool execution wrapper
+- typed host API/syscall surface for plugins
 - policy decisions: allow, deny, ask, sandbox later
 - approval flow
 - audit and trace events
 - memory interfaces
 - event bus
 - configuration and secret-broker interfaces
+- plugin storage isolation
+- background job/scheduler kernel primitives
+
+The LLM runner is a kernel interface, not a provider implementation. Core LLM result and stream types must come from Vercel AI SDK (`ai`) instead of Andy-owned output unions, because AI SDK is the source of truth for text output, tool calls, streaming parts, provider metadata, usage, and future model output variants. Concrete model providers such as OpenAI, Anthropic, local models, or routing services must be plugins or provider packages behind the runner interface.
+
+Multi-agent orchestration must stay bounded by kernel limits: maximum child agents, maximum delegation depth, allowed roles, policy-checked tool use, and audit events for every child session.
+
+When the AI SDK returns multiple tool calls in the same model step, the agent kernel should execute them as a bounded parallel batch with `Effect.all(..., { concurrency })`, validate every input as JSON first, preserve the original model tool-call order when appending tool result messages, and keep each individual tool call policy-checked and audited.
 
 Operational power belongs in plugins:
 
@@ -212,6 +242,9 @@ Tool naming rules:
 - Plugins may expose shared local tool names such as `memory.save`, `filesystem.read`, or `telegram.listen`.
 - Local tool names are aliases only when exactly one installed plugin provides that name.
 - If multiple plugins expose the same local tool name, the runner must reject the ambiguous alias and require the fully qualified name.
+- Agent-facing tool catalogs must advertise fully qualified callable names for every tool.
+- Agent-facing tool catalogs may include a local alias only when that alias is unambiguous.
+- Agents must prefer fully qualified names whenever multiple plugins expose the same local tool name.
 - Standard capabilities and tool names belong in `@andy/tool-catalog`; plugins should reuse those constants instead of inventing near-duplicates.
 - Examples: `andy.memory.markdown.memory.save`, `andy.filesystem.filesystem.read`, `andy.messaging.telegram.telegram.listen`.
 
@@ -256,6 +289,10 @@ Secure execution requirements:
 - A plugin tool must not request capabilities the plugin manifest did not declare.
 - The runtime must reject undeclared tool capabilities at registration time.
 - Tool calls must be checked against policy every time, not only at install time.
+- Plugins must use the typed host API for privileged Andy services such as memory, filesystem, messaging, swarm, background jobs, and secrets.
+- Host API calls are Andy syscalls: the runtime must verify the caller plugin declared the needed capability before forwarding to the target tool.
+- Disable or remove must stop application/plugin tools from executing without deleting inspectable install records.
+- Each plugin needs isolated storage; shared or real filesystem access must go through policy-gated filesystem capabilities.
 - Untrusted plugins should run out-of-process or in a stronger sandbox once the host exists.
 - Plugin execution context should expose only approved host APIs, not raw unrestricted `fs`, shell, network, secrets, or desktop control.
 - Network access must be host allowlisted by manifest and policy.

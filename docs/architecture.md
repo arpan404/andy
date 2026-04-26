@@ -1,6 +1,12 @@
 # Andy Architecture
 
-Andy is a TypeScript-first, plugin-native AI agent runtime.
+Andy is a TypeScript-first, plugin-native AI agent runtime. The product model is an OS for agents:
+
+- Andy Core is the secure kernel.
+- Host APIs are syscalls.
+- First-party plugins are system software.
+- User-installed plugins are application software.
+- Agent sessions are processes coordinated by the kernel.
 
 Every product feature must be delivered as a plugin or as an app surface calling stable core APIs. Core exists to run, secure, observe, and coordinate plugins.
 
@@ -9,16 +15,57 @@ Every product feature must be delivered as a plugin or as an app surface calling
 The core runtime owns the minimal trusted path:
 
 - agent sessions
+- LLM runner abstraction
+- agent session loop
+- multi-agent coordination limits
 - plugin registration
 - capability registry
 - policy decisions
 - tool execution wrapping
 - audit events
 - memory and model interfaces
+- plugin lifecycle state
+- isolated plugin storage
+- typed host API/syscall forwarding
+- background job scheduling primitives
 
 Everything with operational power should live behind a plugin boundary.
 
 Core must not grow channel-specific features. WhatsApp, Telegram, voice, vision, computer control, background workers, swarm orchestration, notifications, filesystem access, shell access, browser control, memory providers, and model providers are plugins.
+
+## Agent Kernel
+
+The agent kernel owns the generic loop:
+
+```text
+session messages
+  -> LLM runner
+  -> message or tool calls
+  -> runtime tool execution
+  -> tool result messages
+  -> final response
+```
+
+The LLM runner is a typed boundary. It receives the current session plus visible tools and returns AI SDK result types directly. Andy must not define a competing LLM output union; Vercel AI SDK is the source of truth for generated text, tool calls, streaming output, usage, warnings, provider metadata, and response messages. Provider-specific implementation belongs outside the kernel so OpenAI, local models, or model routers can be swapped without changing the agent loop.
+
+Every tool call made by an agent still flows through plugin lifecycle checks, policy, audit, and the fully qualified tool registry. When the AI SDK returns tool calls, Andy validates the tool input is JSON, executes the fully qualified runtime tool, and appends AI SDK `tool` messages back into the session.
+
+When a model step returns multiple tool calls, the kernel executes them as a bounded parallel batch. Results are appended back to the session in the same order the model requested them, even if faster tools complete first. This preserves model-message determinism while still allowing low-latency parallel execution.
+
+## Multi-Agent Kernel
+
+The multi-agent coordinator is a kernel primitive for bounded child sessions. It does not grant extra power by itself.
+
+```text
+parent session
+  -> swarm request
+  -> max agents / depth / role checks
+  -> child agent sessions
+  -> normal agent kernel loop
+  -> joined results
+```
+
+Child agents inherit no ambient permissions. They use the same runtime, policy engine, audit path, and plugin capability boundaries as every other agent session.
 
 ## Execution Flow
 
@@ -45,6 +92,44 @@ Plugins declare:
 
 The runtime never calls undeclared capabilities directly.
 
+## Host APIs As Syscalls
+
+Plugins do not receive ambient access to filesystem, secrets, memory, messaging, background execution, swarm orchestration, or external services. They receive a typed host API from the runtime. Each host API call declares the capability it needs and the tool it wants to call.
+
+```text
+plugin code
+  -> host API request
+  -> caller manifest capability check
+  -> runtime policy check
+  -> target plugin tool execution
+  -> audit event
+```
+
+This is the OS boundary. A plugin may declare `memory.save` and call `host.memory.save(...)`; a plugin without `memory.save` gets a typed capability-denied failure before any target tool runs.
+
+Built-in host APIs should remain small and generic:
+
+- `memory.*`
+- `filesystem.*`
+- `messaging.*`
+- `background.*`
+- `swarm.*`
+- `secrets.*`
+
+Feature-specific behavior still belongs in plugins behind these APIs.
+
+## Plugin Lifecycle
+
+User-installed plugins are applications. They have explicit lifecycle state:
+
+- `installed`: present but not runnable by default
+- `enabled`: runnable through policy and audit
+- `disabled`: installed but blocked from executing
+- `upgrading`: manifest review in progress
+- `removed`: no longer runnable, with audit/install history preserved
+
+Plugin upgrades must be reviewed when capabilities, filesystem roots, network hosts, secret scopes, or other permissions expand.
+
 ## Tool Identity
 
 Plugins can expose convenient local tool names like `memory.save`, `filesystem.read`, or `telegram.listen`, but core registers every tool under a fully qualified name:
@@ -62,6 +147,8 @@ Examples:
 Local names are aliases only when exactly one installed plugin provides that name. If two plugins both expose `memory.save`, the alias is ambiguous and the runner must require a fully qualified name.
 
 Canonical names should live in `@andy/tool-catalog` so first-party and third-party plugins can share stable capabilities and tool names.
+
+The agent-facing tool catalog must always expose the fully qualified callable name. A local alias is metadata only, and it is exposed only when exactly one installed plugin provides that local name. This lets two memory providers, filesystem providers, or messaging providers coexist without confusing the planner.
 
 ## Plugin Installation And Sandboxing
 
@@ -91,6 +178,9 @@ Manifest-bound execution rules:
 - Secrets come only from a secret broker.
 - Plugin upgrades cannot silently gain new capabilities.
 - Every install, enable, upgrade, permission change, and tool call is audited.
+- Disabled or removed plugins cannot execute tools.
+- Host API calls are checked against the caller manifest before they are forwarded.
+- Each plugin receives isolated storage; shared storage must be exposed through explicit capabilities.
 
 Sandbox levels:
 

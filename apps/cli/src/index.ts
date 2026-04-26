@@ -3,6 +3,7 @@ import { ConsoleAuditSink } from "@andy/audit";
 import { AgentRuntime } from "@andy/core";
 import { definePlugin, defineTool } from "@andy/plugin-sdk";
 import { CapabilityPolicy } from "@andy/policy";
+import { getJsonObjectProperty, isJsonObject, type JsonValue } from "@andy/types";
 import { Effect } from "effect";
 
 const corePlugin = definePlugin({
@@ -41,9 +42,20 @@ Effect.runSync(runtime.registerPlugin(corePlugin));
 
 const message = process.argv.slice(2).join(" ");
 const result = await Effect.runPromise(
-  runtime.executeTool<{ message: string }>("agent.respond", {
+  runtime.executeTool("agent.respond", {
     message,
   }),
 );
 
-console.log(result.output.message);
+console.log(readMessage(result.output));
+
+function readMessage(value: JsonValue): string {
+  if (isJsonObject(value)) {
+    const message = getJsonObjectProperty(value, "message");
+    if (typeof message === "string") {
+      return message;
+    }
+  }
+
+  return "Andy plugin runtime completed without a message.";
+}

@@ -15,7 +15,8 @@
     "@andy/audit": "workspace:*",
     "@andy/core": "workspace:*",
     "@andy/plugin-sdk": "workspace:*",
-    "@andy/policy": "workspace:*"
+    "@andy/policy": "workspace:*",
+    "@andy/types": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^25.0.0",

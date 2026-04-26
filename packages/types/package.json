@@ -1,5 +1,5 @@
 {
-  "name": "@andy/core",
+  "name": "@andy/types",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -14,16 +14,6 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit"
-  },
-  "dependencies": {
-    "@andy/audit": "workspace:*",
-    "@andy/plugin-sdk": "workspace:*",
-    "@andy/policy": "workspace:*",
-    "@andy/tool-catalog": "workspace:*",
-    "@andy/types": "workspace:*",
-    "@andy/vfs": "workspace:*",
-    "ai": "^6.0.168",
-    "effect": "^3.21.2"
   },
   "devDependencies": {
     "typescript": "^5.9.3"

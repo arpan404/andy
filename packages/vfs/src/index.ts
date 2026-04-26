@@ -42,9 +42,17 @@ export interface AgentFileSystem {
   rm(filePath: string): Effect.Effect<void, FileSystemError>;
 }
 
+export type FileSeed = {
+  readonly [filePath: string]: string;
+};
+
+export type FileSnapshot = {
+  readonly [filePath: string]: string | null;
+};
+
 export interface MemoryFileSystemOptions {
   cwd?: string;
-  seed?: Record<string, string>;
+  seed?: FileSeed;
 }
 
 export class MemoryFileSystem implements AgentFileSystem {
@@ -163,7 +171,7 @@ export class MemoryFileSystem implements AgentFileSystem {
     })();
   }
 
-  toJSON(): Record<string, string | null> {
+  toJSON(): FileSnapshot {
     return this.#volume.toJSON(this.#cwd, {}, true);
   }
 }

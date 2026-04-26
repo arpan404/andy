@@ -39,6 +39,32 @@ export const Capabilities = {
     app: "computer.app",
     accessibilityTree: "computer.accessibility_tree",
   },
+  voice: {
+    listen: "voice.listen",
+    transcribe: "voice.transcribe",
+    speak: "voice.speak",
+  },
+  vision: {
+    capture: "screen.capture",
+    ocr: "screen.ocr",
+    describe: "screen.describe",
+  },
+  browser: {
+    navigate: "browser.navigate",
+    submitForm: "browser.submit_form",
+  },
+  background: {
+    run: "background.run",
+    schedule: "background.schedule",
+    cancel: "background.cancel",
+  },
+  notification: {
+    send: "notification.send",
+    approvalRequest: "notification.approval_request",
+  },
+  secrets: {
+    get: "secrets.get",
+  },
   swarm: {
     plan: "swarm.plan",
     spawn: "swarm.spawn",
@@ -73,6 +99,24 @@ export const Tools = {
     listen: "whatsapp.listen",
     sendMessage: "whatsapp.sendMessage",
     setWebhook: "whatsapp.setWebhook",
+  },
+  background: {
+    run: "background.run",
+    schedule: "background.schedule",
+    cancel: "background.cancel",
+  },
+  swarm: {
+    spawn: "swarm.spawn",
+    delegate: "swarm.delegate",
+    join: "swarm.join",
+    cancel: "swarm.cancel",
+  },
+  messaging: {
+    receive: "messaging.receive",
+    send: "messaging.send",
+  },
+  secrets: {
+    get: "secrets.get",
   },
 } as const;
 

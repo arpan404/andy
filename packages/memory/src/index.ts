@@ -1,5 +1,13 @@
 import realFs from "node:fs/promises";
 import path from "node:path";
+import {
+  getJsonObjectProperty,
+  isJsonObject,
+  isJsonValue,
+  parseJsonValue,
+  type JsonObject,
+  type JsonValue,
+} from "@andy/types";
 import { Effect, Schema } from "effect";
 
 export type MemoryScope = "user" | "project" | "session" | "agent" | "plugin";
@@ -11,7 +19,7 @@ export interface MemoryRecord {
   scope: MemoryScope;
   namespace: string;
   key: string;
-  value: unknown;
+  value: JsonValue;
   tags: string[];
   trust: MemoryTrust;
   source: string;
@@ -24,7 +32,7 @@ export interface SaveMemoryInput {
   scope: MemoryScope;
   namespace: string;
   key: string;
-  value: unknown;
+  value: JsonValue;
   tags?: string[];
   trust?: MemoryTrust;
   source: string;
@@ -86,8 +94,10 @@ export class InMemoryStore implements MemoryStore {
           source: input.source,
           createdAt: existing?.createdAt ?? now,
           updatedAt: now,
-          expiresAt: input.expiresAt,
         };
+        if (input.expiresAt) {
+          record.expiresAt = input.expiresAt;
+        }
 
         this.#records.set(record.id, record);
         return record;
@@ -235,16 +245,7 @@ export class MarkdownMemoryStore implements MemoryStore {
       contents = readResult.right;
 
       for (const block of parseMemoryBlocks(contents)) {
-        yield* self.#memory.save({
-          scope: block.scope,
-          namespace: block.namespace,
-          key: block.key,
-          value: block.value,
-          tags: block.tags,
-          trust: block.trust,
-          source: block.source,
-          expiresAt: block.expiresAt,
-        });
+        yield* self.#memory.save(block);
       }
     })();
   }
@@ -317,29 +318,104 @@ function parseMemoryBlocks(contents: string): SaveMemoryInput[] {
 
   for (const block of blocks) {
     try {
-      const parsed = JSON.parse(block[1] ?? "") as {
-        scope: MemoryScope;
-        namespace: string;
-        key: string;
-        value: unknown;
-        tags?: string[];
-        trust?: MemoryTrust;
-        source?: string;
-        expiresAt?: string;
-      };
+      const jsonText = block[1];
+      if (!jsonText) {
+        continue;
+      }
 
-      memories.push({
-        scope: parsed.scope,
-        namespace: parsed.namespace,
-        key: parsed.key,
-        value: parsed.value,
-        tags: parsed.tags,
-        trust: parsed.trust,
-        source: parsed.source ?? "markdown",
-        expiresAt: parsed.expiresAt ? new Date(parsed.expiresAt) : undefined,
-      });
+      const parsed = parseJsonValue(jsonText);
+      const input = memoryInputFromJson(parsed);
+      if (input) {
+        memories.push(input);
+      }
     } catch {}
   }
 
   return memories;
+}
+
+function memoryInputFromJson(
+  value: JsonValue | undefined,
+): SaveMemoryInput | undefined {
+  if (!isMemoryJsonObject(value)) {
+    return undefined;
+  }
+
+  const scope = getJsonObjectProperty(value, "scope");
+  const namespace = getJsonObjectProperty(value, "namespace");
+  const key = getJsonObjectProperty(value, "key");
+  const memoryValue = getJsonObjectProperty(value, "value");
+  const tags = getJsonObjectProperty(value, "tags");
+  const trust = getJsonObjectProperty(value, "trust");
+  const source = getJsonObjectProperty(value, "source");
+  const expiresAt = getJsonObjectProperty(value, "expiresAt");
+
+  if (
+    !isMemoryScope(scope) ||
+    typeof namespace !== "string" ||
+    typeof key !== "string" ||
+    !isJsonValue(memoryValue)
+  ) {
+    return undefined;
+  }
+
+  if (tags !== undefined && !isStringArray(tags)) {
+    return undefined;
+  }
+
+  if (trust !== undefined && !isMemoryTrust(trust)) {
+    return undefined;
+  }
+
+  if (source !== undefined && typeof source !== "string") {
+    return undefined;
+  }
+
+  if (expiresAt !== undefined && typeof expiresAt !== "string") {
+    return undefined;
+  }
+
+  const input: SaveMemoryInput = {
+    scope,
+    namespace,
+    key,
+    value: memoryValue,
+    source: source ?? "markdown",
+  };
+
+  if (tags) {
+    input.tags = [...tags];
+  }
+
+  if (trust) {
+    input.trust = trust;
+  }
+
+  if (expiresAt) {
+    input.expiresAt = new Date(expiresAt);
+  }
+
+  return input;
+}
+
+function isMemoryJsonObject(value: JsonValue | undefined): value is JsonObject {
+  return isJsonObject(value);
+}
+
+function isStringArray(value: JsonValue): value is readonly string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function isMemoryScope(value: JsonValue | undefined): value is MemoryScope {
+  return (
+    value === "user" ||
+    value === "project" ||
+    value === "session" ||
+    value === "agent" ||
+    value === "plugin"
+  );
+}
+
+function isMemoryTrust(value: JsonValue): value is MemoryTrust {
+  return value === "trusted" || value === "untrusted" || value === "derived";
 }

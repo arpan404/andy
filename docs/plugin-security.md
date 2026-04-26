@@ -35,12 +35,16 @@ Every plugin must declare:
 - Reject tools that request undeclared capabilities.
 - Check policy on every tool call.
 - Expose only approved APIs to plugin context.
+- Treat host APIs as syscalls: first check the caller plugin declared the requested capability, then forward through policy-gated tools.
 - Keep scratch work in the virtual filesystem by default.
+- Keep plugin application storage isolated from other plugins by default.
 - Require scoped roots for real filesystem access.
 - Require `filesystem.read_sensitive` plus `permissions.filesystem.sensitiveReadRoots` for OS folders, app folders, browser profiles, message stores, credentials, and other private user data.
 - Require allowlisted hosts for network access.
 - Require secret broker access for credentials.
 - Audit install and execution lifecycle events.
+- Block disabled or removed plugin tools from execution.
+- Block host API calls for undeclared capabilities before any target tool runs.
 - Treat swarm spawn/delegate/join/cancel as audited plugin actions.
 - Treat persistent user memory writes, memory deletion, and semantic indexing as audited plugin actions.
 - Prefer Markdown memory as the inspectable source of truth; treat vector or database-backed memory as indexes or alternate providers selected by the user.

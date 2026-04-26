@@ -7,6 +7,56 @@ export type AuditEvent =
       toolCount: number;
     }
   | {
+      type: "plugin.enabled" | "plugin.disabled" | "plugin.removed";
+      pluginId: string;
+    }
+  | {
+      type: "plugin.install.requested" | "plugin.install.completed";
+      pluginId: string;
+      source: string;
+    }
+  | {
+      type: "plugin.host.started" | "plugin.host.stopped";
+      pluginId: string;
+      executionMode: string;
+    }
+  | {
+      type: "plugin.host_api.requested";
+      pluginId: string;
+      runId: string;
+      capability: string;
+      toolName: string;
+    }
+  | {
+      type: "agent.session.started" | "agent.session.completed";
+      sessionId: string;
+      agentId: string;
+    }
+  | {
+      type: "agent.session.cancelled";
+      sessionId: string;
+      agentId: string;
+      reason: string;
+    }
+  | {
+      type: "agent.stream.started" | "agent.stream.completed";
+      sessionId: string;
+      agentId: string;
+    }
+  | {
+      type: "agent.tool.requested";
+      sessionId: string;
+      agentId: string;
+      toolName: string;
+    }
+  | {
+      type: "swarm.child.started";
+      swarmId: string;
+      parentSessionId: string;
+      childSessionId: string;
+      role: string;
+    }
+  | {
       type: "tool.requested";
       runId: string;
       toolName: string;
@@ -17,6 +67,28 @@ export type AuditEvent =
       toolName: string;
       decision: "allow" | "deny" | "ask";
       reason?: string;
+    }
+  | {
+      type: "approval.requested";
+      approvalId: string;
+      runId: string;
+      toolName: string;
+      reason: string;
+    }
+  | {
+      type: "approval.resolved";
+      approvalId: string;
+      decision: "approved" | "denied" | "expired";
+    }
+  | {
+      type: "background.job.created" | "background.job.updated";
+      jobId: string;
+      status: string;
+    }
+  | {
+      type: "secret.requested";
+      pluginId: string;
+      scope: string;
     }
   | {
       type: "tool.completed";
@@ -31,7 +103,8 @@ export interface AuditSink {
 export class ConsoleAuditSink implements AuditSink {
   record(event: AuditEvent): Effect.Effect<void> {
     return Effect.sync(() => {
-      if (process.env.ANDY_AUDIT !== "1") {
+      const auditEnvKey = "ANDY_AUDIT";
+      if (process.env[auditEnvKey] !== "1") {
         return;
       }
 

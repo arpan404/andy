@@ -1,4 +1,5 @@
 import type { ToolDefinition } from "@andy/plugin-sdk";
+import type { JsonValue } from "@andy/types";
 
 export type PolicyDecision =
   | { type: "allow" }
@@ -6,7 +7,7 @@ export type PolicyDecision =
   | { type: "ask"; reason: string };
 
 export interface PolicyEngine {
-  decide(tool: ToolDefinition, input: unknown): PolicyDecision;
+  decide(tool: ToolDefinition, input: JsonValue): PolicyDecision;
 }
 
 export interface CapabilityPolicyOptions {
@@ -24,7 +25,7 @@ export class CapabilityPolicy implements PolicyEngine {
       options.approvalRequiredCapabilities ?? new Set();
   }
 
-  decide(tool: ToolDefinition): PolicyDecision {
+  decide(tool: ToolDefinition, _input: JsonValue): PolicyDecision {
     for (const capability of tool.capabilities) {
       if (!this.#allowedCapabilities.has(capability)) {
         return {
