@@ -10,6 +10,7 @@ import { buildAiSdkTools } from "./ai-tools.js";
 import { ApprovalResumeEngine, createApprovalToolResult } from "./approval-resume.js";
 import { ApprovalManager } from "./approvals.js";
 import { BackgroundJobScheduler } from "./background.js";
+import { BackgroundJobExecutor } from "./background-executor.js";
 import { CancellationRegistry, withTimeout } from "./cancellation.js";
 import { CommunicationBridge } from "./communication.js";
 import { InMemoryEventBus } from "./events.js";
@@ -19,12 +20,17 @@ import { JsonFileCoreStateStore } from "./state.js";
 import { TraceManager } from "./tracing.js";
 import { DefaultHostedPluginHostApi } from "./host-api-handler.js";
 import { PluginLifecycleManager } from "./plugin-lifecycle.js";
-import { PluginInstaller, StaticPluginManifestFetcher } from "./plugin-installer.js";
+import {
+  LocalPluginPackageInstaller,
+  PluginInstaller,
+  StaticPluginManifestFetcher,
+} from "./plugin-installer.js";
 import { createAndyDaemon } from "./daemon.js";
 import {
   SubprocessManifestPluginHost,
   WorkerManifestPluginHost,
 } from "./plugin-host.js";
+import { verifyProcessIsolationProfile } from "./plugin-sandbox.js";
 
 describe("core kernel services", () => {
   test("creates approval requests for ask policy decisions", async () => {
@@ -356,6 +362,63 @@ describe("core kernel services", () => {
     expect(resume.listParked()).toHaveLength(0);
   });
 
+  test("hydrates parked approval descriptors and resumes after restart", async () => {
+    const audit = new ConsoleAuditSink();
+    const approvals = new ApprovalManager({ audit });
+    const runtime = new AgentRuntime({
+      audit,
+      approvalManager: approvals,
+      policy: new CapabilityPolicy({
+        allowedCapabilities: new Set(["memory.save"]),
+      }),
+    });
+    await Effect.runPromise(
+      runtime.registerPlugin(
+        definePlugin({
+          id: "andy.memory.restart",
+          name: "Restart Memory",
+          version: "0.1.0",
+          capabilities: ["memory.save"],
+          tools: [
+            defineTool({
+              name: "memory.save",
+              description: "Save memory.",
+              capabilities: ["memory.save"],
+              risk: "medium",
+              execute(input) {
+                return Effect.succeed({ saved: input });
+              },
+            }),
+          ],
+        }),
+      ),
+    );
+    const approval = await Effect.runPromise(
+      approvals.create({
+        runId: "run-restart",
+        toolName: "andy.memory.restart.memory.save",
+        input: { key: "name" },
+        reason: "Memory write requires approval.",
+      }),
+    );
+    const resume = new ApprovalResumeEngine({
+      approvals,
+      executor: (descriptor) =>
+        runtime.executeTool(descriptor.toolName, descriptor.input, descriptor.context),
+    });
+    await Effect.runPromise(
+      resume.parkDescriptor(approval, {
+        kind: "tool.execute",
+        toolName: "andy.memory.restart.memory.save",
+        input: { key: "name" },
+      }),
+    );
+
+    const result = await Effect.runPromise(resume.resumeApproved(approval.id));
+
+    expect(result.output).toEqual({ saved: { key: "name" } });
+  });
+
   test("plans plugin install with validated manifest permission summary", async () => {
     const source = {
       type: "github" as const,
@@ -399,6 +462,41 @@ describe("core kernel services", () => {
     expect(plan.permissionSummary).toContain("capability:memory.save");
     expect(plan.permissionSummary).toContain("network:api.example.com");
     expect(plan.pinnedSource.reference).toBe(source.reference);
+  });
+
+  test("installs planned plugin package disabled by default", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "andy-plugin-install-"));
+    const source = {
+      type: "github" as const,
+      reference:
+        "https://example.com/plugin.json?ref=0123456789012345678901234567890123456789",
+    };
+    const plan = {
+      source,
+      pinnedSource: source,
+      manifest: {
+        id: "andy.test.package",
+        name: "Package Test",
+        version: "0.1.0",
+        entry: "./plugin.ts",
+        capabilities: [],
+        risk: "low" as const,
+        source,
+        tools: [],
+      },
+      requiresApproval: true,
+      approvalReasons: ["review"],
+      permissionSummary: [],
+    };
+    const installer = new LocalPluginPackageInstaller({
+      audit: new ConsoleAuditSink(),
+      installRoot: dir,
+    });
+
+    const installed = await Effect.runPromise(installer.install(plan));
+
+    expect(installed.enabled).toBe(false);
+    expect(installed.manifestPath).toContain("plugin.json");
   });
 
   test("runs manifest-declared tools through a worker plugin host", async () => {
@@ -585,6 +683,63 @@ describe("core kernel services", () => {
     );
 
     expect(output).toEqual({ saved: { key: "city", value: "Paris" } });
+  });
+
+  test("background executor runs due jobs through runtime policy", async () => {
+    const audit = new ConsoleAuditSink();
+    const runtime = new AgentRuntime({
+      audit,
+      policy: new CapabilityPolicy({
+        allowedCapabilities: new Set(["memory.save"]),
+      }),
+    });
+    await Effect.runPromise(
+      runtime.registerPlugin(
+        definePlugin({
+          id: "andy.background.memory",
+          name: "Background Memory",
+          version: "0.1.0",
+          capabilities: ["memory.save"],
+          tools: [
+            defineTool({
+              name: "memory.save",
+              description: "Save memory.",
+              capabilities: ["memory.save"],
+              risk: "medium",
+              execute(input) {
+                return Effect.succeed({ saved: input });
+              },
+            }),
+          ],
+        }),
+      ),
+    );
+    const scheduler = new BackgroundJobScheduler({ audit });
+    await Effect.runPromise(
+      scheduler.schedule({
+        pluginId: "andy.background.memory",
+        toolName: "andy.background.memory.memory.save",
+        input: { key: "city" },
+      }),
+    );
+    const executor = new BackgroundJobExecutor({ audit, scheduler, runtime });
+
+    const [result] = await Effect.runPromise(executor.runDue());
+    const [job] = await Effect.runPromise(scheduler.list());
+
+    expect(result?.output).toEqual({ saved: { key: "city" } });
+    expect(job?.status).toBe("completed");
+  });
+
+  test("requires strong isolation when requested", async () => {
+    const result = await Effect.runPromiseExit(
+      verifyProcessIsolationProfile(
+        { kind: "process-boundary" },
+        { requireStrongIsolation: true },
+      ),
+    );
+
+    expect(result._tag).toBe("Failure");
   });
 
   test("creates daemon service graph", async () => {

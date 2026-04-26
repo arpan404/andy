@@ -13,6 +13,7 @@ import {
   type MemoryFileSystemOptions,
 } from "@andy/vfs";
 import { Effect } from "effect";
+import { Ajv, type AnySchema, type ErrorObject } from "ajv";
 import {
   type AgentRuntimeError,
   PluginDisabledError,
@@ -28,7 +29,10 @@ import {
   ToolPolicyDeniedError,
 } from "./errors.js";
 import { ApprovalManager } from "./approvals.js";
-import type { ApprovalResumeEngine } from "./approval-resume.js";
+import type {
+  ApprovalActionDescriptor,
+  ApprovalResumeEngine,
+} from "./approval-resume.js";
 import { toAiSdkToolName } from "./ai-tools.js";
 import { createPluginHostApi } from "./host-api.js";
 import type { RuntimeToolRecord, ToolExecutionResult } from "./types.js";
@@ -357,15 +361,18 @@ export class AgentRuntime {
           reason: decision.reason,
         });
         if (self.#approvalResume) {
-          yield* self.#approvalResume.park(approval, () =>
-            self.#executeRegisteredTool({
-              plugin,
-              registeredTool,
-              input,
-              runId,
-              toolName,
-              context,
-            }),
+          yield* self.#approvalResume.park(
+            approval,
+            () =>
+              self.#executeRegisteredTool({
+                plugin,
+                registeredTool,
+                input,
+                runId,
+                toolName,
+                context,
+              }),
+            createApprovalActionDescriptor({ toolName, input, context }),
           );
         }
         return yield* Effect.fail(
@@ -554,12 +561,13 @@ function validateJsonSchema(options: {
     return Effect.void;
   }
 
-  const valid = matchesMinimalJsonSchema(options.schema, options.value);
+  const validator = schemaValidatorFor(options.schema);
+  const valid = validator(options.value);
   if (valid) {
     return Effect.void;
   }
 
-  const message = `Tool '${options.toolName}' ${options.phase} did not match its JSON schema.`;
+  const message = `Tool '${options.toolName}' ${options.phase} did not match its JSON schema: ${formatSchemaErrors(validator.errors)}.`;
   if (options.phase === "input") {
     return Effect.fail(
       new ToolInputSchemaInvalidError({
@@ -577,54 +585,33 @@ function validateJsonSchema(options: {
   );
 }
 
-function matchesMinimalJsonSchema(schema: unknown, value: JsonValue): boolean {
-  if (typeof schema !== "object" || schema === null) {
-    return true;
+const runtimeSchemaValidator = new Ajv({ strict: false, allErrors: true });
+
+function schemaValidatorFor(schema: unknown) {
+  return runtimeSchemaValidator.compile(schema as AnySchema);
+}
+
+function formatSchemaErrors(errors: ErrorObject[] | null | undefined): string {
+  if (!errors || errors.length === 0) {
+    return "unknown validation error";
   }
 
-  const typed = schema as {
-    type?: unknown;
-    required?: unknown;
-    properties?: unknown;
+  return errors
+    .map((error) => `${error.instancePath || "/"} ${error.message ?? "is invalid"}`)
+    .join("; ");
+}
+
+function createApprovalActionDescriptor(options: {
+  toolName: string;
+  input: JsonValue;
+  context: ToolExecutionContext;
+}): ApprovalActionDescriptor {
+  return {
+    kind: "tool.execute",
+    toolName: options.toolName,
+    input: options.input,
+    ...(Object.keys(options.context).length > 0 ? { context: options.context } : {}),
   };
-  if (typed.type === "object") {
-    if (typeof value !== "object" || value === null || Array.isArray(value)) {
-      return false;
-    }
-    const record = value as Record<string, JsonValue>;
-    if (Array.isArray(typed.required)) {
-      for (const key of typed.required) {
-        if (typeof key === "string" && !(key in record)) {
-          return false;
-        }
-      }
-    }
-    if (typeof typed.properties === "object" && typed.properties !== null) {
-      for (const [key, propertySchema] of Object.entries(typed.properties)) {
-        if (
-          key in record &&
-          !matchesMinimalJsonSchema(propertySchema, record[key] ?? null)
-        ) {
-          return false;
-        }
-      }
-    }
-  }
-
-  if (typed.type === "array" && !Array.isArray(value)) {
-    return false;
-  }
-  if (typed.type === "string" && typeof value !== "string") {
-    return false;
-  }
-  if (typed.type === "number" && typeof value !== "number") {
-    return false;
-  }
-  if (typed.type === "boolean" && typeof value !== "boolean") {
-    return false;
-  }
-
-  return true;
 }
 
 function createPluginStorageFileSystem(

@@ -72,7 +72,7 @@ export class BackgroundJobScheduler {
     const self = this;
     return Effect.fn("BackgroundJobScheduler.cancel")(function* () {
       const job = self.#jobs.get(jobId);
-      if (!job || job.status !== "scheduled") {
+      if (!job || (job.status !== "scheduled" && job.status !== "running")) {
         return false;
       }
 

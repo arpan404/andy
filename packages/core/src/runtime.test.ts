@@ -383,4 +383,51 @@ describe("AgentRuntime tool names", () => {
     expect(invalid._tag).toBe("Failure");
     expect(valid.output).toEqual({ saved: { key: "city" } });
   });
+
+  test("uses full JSON Schema validation features through AJV", async () => {
+    const runtime = new AgentRuntime({
+      audit: new ConsoleAuditSink(),
+      policy: new CapabilityPolicy({
+        allowedCapabilities: new Set(["memory.save"]),
+      }),
+    });
+    await Effect.runPromise(
+      runtime.registerPlugin(
+        definePlugin({
+          id: "andy.schema.enum",
+          name: "Schema Enum Test",
+          version: "0.1.0",
+          capabilities: ["memory.save"],
+          tools: [
+            defineTool({
+              name: "memory.save",
+              description: "Save memory",
+              capabilities: ["memory.save"],
+              risk: "medium",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  scope: { enum: ["user", "project"] },
+                },
+                required: ["scope"],
+                additionalProperties: false,
+              },
+              execute(input) {
+                return Effect.succeed({ saved: input });
+              },
+            }),
+          ],
+        }),
+      ),
+    );
+
+    const invalid = await Effect.runPromiseExit(
+      runtime.executeTool("andy.schema.enum.memory.save", {
+        scope: "system",
+        extra: true,
+      }),
+    );
+
+    expect(invalid._tag).toBe("Failure");
+  });
 });

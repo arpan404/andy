@@ -4,6 +4,7 @@ import type { ApprovalManager, ApprovalRequest } from "./approvals.js";
 import {
   ApprovalDeniedError,
   ApprovalNotFoundError,
+  ToolNotRegisteredError,
   type AgentRuntimeError,
   type ApprovalAlreadyResolvedError,
 } from "./errors.js";
@@ -11,23 +12,75 @@ import type { ToolExecutionResult } from "./types.js";
 
 export interface ParkedApprovalAction {
   approval: ApprovalRequest;
+  descriptor?: ApprovalActionDescriptor;
   execute(): Effect.Effect<ToolExecutionResult, AgentRuntimeError>;
 }
 
+export interface ApprovalActionDescriptor {
+  kind: "tool.execute";
+  toolName: string;
+  input: JsonValue;
+  context?: {
+    sessionId?: string;
+    agentId?: string;
+    userId?: string;
+    channelId?: string;
+    taskId?: string;
+    traceId?: string;
+    cancellationTokenId?: string;
+  };
+}
+
+export type ApprovalActionExecutor = (
+  descriptor: ApprovalActionDescriptor,
+) => Effect.Effect<ToolExecutionResult, AgentRuntimeError>;
+
 export class ApprovalResumeEngine {
   readonly #approvals: ApprovalManager;
+  readonly #executor: ApprovalActionExecutor | undefined;
   readonly #parked = new Map<string, ParkedApprovalAction>();
 
-  constructor(options: { approvals: ApprovalManager }) {
+  constructor(options: {
+    approvals: ApprovalManager;
+    executor?: ApprovalActionExecutor;
+  }) {
     this.#approvals = options.approvals;
+    this.#executor = options.executor;
   }
 
   park(
     approval: ApprovalRequest,
     execute: () => Effect.Effect<ToolExecutionResult, AgentRuntimeError>,
+    descriptor?: ApprovalActionDescriptor,
   ): Effect.Effect<ApprovalRequest> {
     return Effect.sync(() => {
-      this.#parked.set(approval.id, { approval, execute });
+      this.#parked.set(approval.id, {
+        approval,
+        execute,
+        ...(descriptor ? { descriptor } : {}),
+      });
+      return approval;
+    });
+  }
+
+  parkDescriptor(
+    approval: ApprovalRequest,
+    descriptor: ApprovalActionDescriptor,
+  ): Effect.Effect<ApprovalRequest> {
+    return Effect.sync(() => {
+      this.#parked.set(approval.id, {
+        approval,
+        descriptor,
+        execute: () =>
+          this.#executor
+            ? this.#executor(descriptor)
+            : Effect.fail(
+                new ToolNotRegisteredError({
+                  toolName: descriptor.toolName,
+                  message: `No approval action executor is configured for approval '${approval.id}'.`,
+                }),
+              ),
+      });
       return approval;
     });
   }
@@ -110,6 +163,15 @@ export class ApprovalResumeEngine {
 
   listParked(): readonly ApprovalRequest[] {
     return [...this.#parked.values()].map((item) => item.approval);
+  }
+
+  listParkedDescriptors(): readonly {
+    approval: ApprovalRequest;
+    descriptor: ApprovalActionDescriptor;
+  }[] {
+    return [...this.#parked.values()].flatMap((item) =>
+      item.descriptor ? [{ approval: item.approval, descriptor: item.descriptor }] : [],
+    );
   }
 }
 

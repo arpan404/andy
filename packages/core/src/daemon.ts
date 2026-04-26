@@ -3,10 +3,12 @@ import type { PolicyEngine } from "@andy/policy";
 import { Effect } from "effect";
 import { ApprovalManager } from "./approvals.js";
 import { ApprovalResumeEngine } from "./approval-resume.js";
+import { BackgroundJobExecutor } from "./background-executor.js";
 import { BackgroundJobScheduler } from "./background.js";
 import { CommunicationBridge } from "./communication.js";
 import { InMemoryEventBus } from "./events.js";
 import { DefaultHostedPluginHostApi } from "./host-api-handler.js";
+import { ModelProviderRegistry } from "./model-provider.js";
 import { PluginLifecycleManager } from "./plugin-lifecycle.js";
 import { SubprocessManifestPluginHost } from "./plugin-host.js";
 import { AgentRuntime } from "./runtime.js";
@@ -23,9 +25,11 @@ export interface AndyDaemonServices {
   approvals: ApprovalManager;
   approvalResume: ApprovalResumeEngine;
   background: BackgroundJobScheduler;
+  backgroundExecutor: BackgroundJobExecutor;
   secrets: InMemorySecretBroker;
   hostedPluginHostApi: DefaultHostedPluginHostApi;
   lifecycle: PluginLifecycleManager;
+  modelProviders: ModelProviderRegistry;
   saveState(): Effect.Effect<void, CoreStateStoreError>;
 }
 
@@ -41,9 +45,14 @@ export function createAndyDaemon(options: {
       audit: options.audit,
       communication,
     });
-    const approvalResume = new ApprovalResumeEngine({ approvals });
+    let runtime!: AgentRuntime;
+    const approvalResume = new ApprovalResumeEngine({
+      approvals,
+      executor: (descriptor) =>
+        runtime.executeTool(descriptor.toolName, descriptor.input, descriptor.context),
+    });
     const background = new BackgroundJobScheduler({ audit: options.audit });
-    const runtime = new AgentRuntime({
+    runtime = new AgentRuntime({
       audit: options.audit,
       policy: options.policy,
       approvalManager: approvals,
@@ -64,8 +73,35 @@ export function createAndyDaemon(options: {
       if (snapshot) {
         yield* approvals.hydrate(snapshot.approvals);
         yield* background.hydrate(snapshot.backgroundJobs);
+        for (const action of snapshot.approvalActions ?? []) {
+          yield* approvalResume.parkDescriptor(action.approval, action.descriptor);
+        }
       }
     }
+
+    const saveState = (): Effect.Effect<void, CoreStateStoreError> => {
+      if (!stateStore) {
+        return Effect.void;
+      }
+
+      return Effect.fn("AndyDaemon.saveState")(function* () {
+        const backgroundJobs = yield* background.list();
+        yield* stateStore.save({
+          plugins: runtime.listPlugins(),
+          sessions: [],
+          approvals: approvals.list(),
+          backgroundJobs,
+          approvalActions: approvalResume.listParkedDescriptors(),
+        });
+      })();
+    };
+
+    const backgroundExecutor = new BackgroundJobExecutor({
+      audit: options.audit,
+      scheduler: background,
+      runtime,
+      saveState,
+    });
 
     const services: AndyDaemonServices = {
       eventBus: new InMemoryEventBus(),
@@ -76,24 +112,12 @@ export function createAndyDaemon(options: {
       approvals,
       approvalResume,
       background,
+      backgroundExecutor,
       secrets: new InMemorySecretBroker({ audit: options.audit }),
       hostedPluginHostApi,
       lifecycle,
-      saveState: () => {
-        if (!stateStore) {
-          return Effect.void;
-        }
-
-        return Effect.fn("AndyDaemon.saveState")(function* () {
-          const backgroundJobs = yield* background.list();
-          yield* stateStore.save({
-            plugins: runtime.listPlugins(),
-            sessions: [],
-            approvals: approvals.list(),
-            backgroundJobs,
-          });
-        })();
-      },
+      modelProviders: new ModelProviderRegistry(),
+      saveState,
     };
     return services;
   })();

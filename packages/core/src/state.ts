@@ -5,6 +5,7 @@ import type { BackgroundJob } from "./background.js";
 import type { TraceContext } from "./tracing.js";
 import type { EventEnvelope } from "./events.js";
 import type { SecretReference } from "./secrets.js";
+import type { ApprovalActionDescriptor } from "./approval-resume.js";
 import { Effect } from "effect";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
@@ -20,6 +21,10 @@ export interface CoreStateSnapshot {
   events?: readonly EventEnvelope[];
   config?: Record<string, unknown>;
   secretReferences?: readonly Omit<SecretReference, "value">[];
+  approvalActions?: readonly {
+    approval: ApprovalRequest;
+    descriptor: ApprovalActionDescriptor;
+  }[];
 }
 
 export interface CoreStateStore {

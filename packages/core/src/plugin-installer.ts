@@ -5,6 +5,8 @@ import {
   type PluginSource,
 } from "@andy/plugin-sdk";
 import { Effect } from "effect";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { PluginInstallError } from "./errors.js";
 import { stringifyCause } from "./utils.js";
 
@@ -61,6 +63,61 @@ export class PluginInstaller {
       pluginId: plan.manifest.id,
       source: plan.pinnedSource.reference,
     });
+  }
+}
+
+export interface PluginPackageInstaller {
+  install(
+    plan: PluginInstallPlan,
+  ): Effect.Effect<InstalledPluginPackage, PluginInstallError>;
+}
+
+export interface InstalledPluginPackage {
+  pluginId: string;
+  source: PluginSource;
+  manifestPath: string;
+  enabled: false;
+}
+
+export class LocalPluginPackageInstaller implements PluginPackageInstaller {
+  readonly #installRoot: string;
+  readonly #audit: AuditSink;
+
+  constructor(options: { installRoot: string; audit: AuditSink }) {
+    this.#installRoot = options.installRoot;
+    this.#audit = options.audit;
+  }
+
+  install(
+    plan: PluginInstallPlan,
+  ): Effect.Effect<InstalledPluginPackage, PluginInstallError> {
+    const self = this;
+    return Effect.fn("LocalPluginPackageInstaller.install")(function* () {
+      const manifestPath = join(self.#installRoot, plan.manifest.id, "plugin.json");
+      yield* Effect.tryPromise({
+        try: async () => {
+          await mkdir(join(self.#installRoot, plan.manifest.id), { recursive: true });
+          await writeFile(manifestPath, JSON.stringify(plan.manifest, null, 2), "utf8");
+        },
+        catch: (cause) =>
+          new PluginInstallError({
+            source: plan.pinnedSource.reference,
+            message: `Failed to install plugin '${plan.manifest.id}' into '${self.#installRoot}'.`,
+            cause: stringifyCause(cause),
+          }),
+      });
+      yield* self.#audit.record({
+        type: "plugin.install.completed",
+        pluginId: plan.manifest.id,
+        source: plan.pinnedSource.reference,
+      });
+      return {
+        pluginId: plan.manifest.id,
+        source: plan.pinnedSource,
+        manifestPath,
+        enabled: false as const,
+      };
+    })();
   }
 }
 

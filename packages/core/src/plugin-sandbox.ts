@@ -168,6 +168,35 @@ export function checkProcessIsolationAvailability(
   )();
 }
 
+export function verifyProcessIsolationProfile(
+  profile: ProcessIsolationProfile,
+  options: { requireStrongIsolation?: boolean } = {},
+): Effect.Effect<void, PluginSandboxError> {
+  return Effect.fn("verifyProcessIsolationProfile")(function* () {
+    const available = yield* checkProcessIsolationAvailability(profile);
+    if (!available) {
+      return yield* Effect.fail(
+        new PluginSandboxError({
+          pluginId: "core",
+          root: "",
+          message: `Process isolation profile '${profile.kind}' is not available on this host.`,
+        }),
+      );
+    }
+
+    if (options.requireStrongIsolation && profile.kind === "process-boundary") {
+      return yield* Effect.fail(
+        new PluginSandboxError({
+          pluginId: "core",
+          root: "",
+          message:
+            "The process-boundary profile is not strong enough for untrusted plugins. Use macos-sandbox-exec, container, or remote isolation.",
+        }),
+      );
+    }
+  })();
+}
+
 function createMacOsSandboxProfile(options: {
   allowNetwork: boolean;
   sandbox: PluginSandbox;

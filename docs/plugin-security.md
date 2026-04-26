@@ -52,6 +52,7 @@ Every plugin must declare:
 - Treat swarm spawn/delegate/join/cancel as audited plugin actions.
 - Treat persistent user memory writes, memory deletion, and semantic indexing as audited plugin actions.
 - Validate declared tool input and output schemas at the runtime boundary.
+- Use AJV for JSON Schema validation so plugin contracts can use standard JSON Schema features such as `enum`, `additionalProperties`, and nested schema constraints.
 - Carry trace, session, user, channel, task, and cancellation metadata through policy and audit for correlation.
 - Prefer Markdown memory as the inspectable source of truth; treat vector or database-backed memory as indexes or alternate providers selected by the user.
 - Reject tools at host startup when their declared sandbox compatibility does not include the selected execution mode.
@@ -126,17 +127,19 @@ Worker and subprocess plugins may request host APIs through the plugin RPC chann
 
 The default host API handler routes requests back through policy-gated runtime tools. This keeps sandboxed plugins from receiving direct core object references while still letting them request syscalls such as memory, filesystem, communication, secrets, background, or swarm.
 
-Subprocess transport enforces bounded message size and request timeouts. Production hosts should still prefer OS sandbox, container, or remote execution profiles for untrusted plugins because transport limits do not replace process confinement.
+Subprocess transport enforces bounded message size and request timeouts. Production hosts should still prefer OS sandbox, container, or remote execution profiles for untrusted plugins because transport limits do not replace process confinement. The process isolation verifier can reject the basic process-boundary profile when strong isolation is required.
 
 ## Approval Resume
 
 Approval requests are parked with the runtime tool action they would run. After the user approves through a communication channel, the approval resume engine executes the exact suspended action and clears it. Denied approvals clear the parked action without running it.
 
-Pending approvals can be expired and cleared from the parked-action table. Durable restart recovery still needs restart-safe action descriptors because in-memory closures cannot be serialized.
+Pending approvals can be expired and cleared from the parked-action table. Runtime tool approvals include serializable action descriptors so they can be hydrated after daemon restart. Custom in-memory closures remain non-durable by design.
 
 ## Lifecycle
 
 Hosted plugins should be started through the core lifecycle manager. The manager starts the selected host, registers the hosted proxy tools with the runtime, audits lifecycle events, and stops handles during shutdown. If runtime registration fails, the host handle is stopped so plugin code is not left running without registered policy gates.
+
+Plugin packages installed from a reviewed plan are materialized disabled by default. Enabling remains a separate lifecycle step so install, review, enable, and runtime execution stay distinct audit points.
 
 ## Upgrade Rule
 

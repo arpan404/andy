@@ -41,11 +41,16 @@ Andy Core should stay small and trusted. It should provide the kernel, policy bo
 - Streaming agent kernel can consume AI SDK stream events, expose structured stream events, and execute stream-planned tool calls through runtime policy.
 - Agent and tool execution contexts carry trace, session, channel, task, and cancellation metadata through policy and audit.
 - Runtime validates declared tool input and output JSON schemas at the core boundary.
+- Runtime uses AJV for JSON Schema validation instead of a hand-rolled partial checker.
 - Plugin lifecycle manager starts hosted plugins, registers runtime proxy tools, and stops plugin handles.
-- Plugin install planning validates manifests, checks schema compatibility, pins reviewed sources, and summarizes requested permissions.
+- Plugin install planning validates manifests, checks schema compatibility, pins reviewed sources, summarizes requested permissions, and can materialize a disabled-by-default local package record.
 - Event bus keeps bounded replay history for daemon/app subscribers.
 - Trace manager tracks hydrated trace contexts and child trace creation.
 - Secret broker supports redacted references and rotation audit events.
+- Approval resume can persist serializable tool-execution descriptors and hydrate them after daemon restart.
+- Background executor runs due jobs through the normal runtime policy boundary and persists job progress.
+- Model provider registry keeps provider implementations behind the AI SDK runner interface.
+- Process isolation verifier can reject weak profiles when strong untrusted-plugin isolation is required.
 
 ## Needed Next
 
@@ -70,7 +75,7 @@ Still needed:
 - expire pending action
 - persist approvals across daemon restarts
 
-Pending approval expiry exists in memory; durable parked-action recovery still needs restart-safe action descriptors because closures cannot be serialized.
+Pending approval expiry exists in memory. Runtime tool approvals now also record serializable action descriptors for restart-safe resume; non-tool custom closures remain in-memory only.
 
 ### Plugin Host Isolation
 
@@ -87,13 +92,13 @@ Bun workers and subprocesses isolate plugin code from the core process. The subp
 
 ### Manifest Schema And Validation
 
-Core now has a first strict manifest schema in `@andy/plugin-sdk`, optional schema versioning, tool input/output schema declarations, and installer compatibility checks.
+Core now has a first strict manifest schema in `@andy/plugin-sdk`, optional schema versioning, tool input/output schema declarations, installer compatibility checks, and AJV runtime validation.
 
-Still needed: broader JSON Schema support beyond the current minimal runtime validator and installer integration against real plugin packages.
+Still needed: installer integration against real plugin packages.
 
 ### Durable State
 
-Core has in-memory and JSON file state store implementations. The daemon can hydrate approvals/background jobs and save runtime snapshots. It still needs durable stores for:
+Core has in-memory and JSON file state store implementations. The daemon can hydrate approvals, restart-safe approval action descriptors, background jobs, and save runtime snapshots. It still needs durable stores for:
 
 - installed plugin records
 - plugin lifecycle state
@@ -106,13 +111,13 @@ In-memory implementations are acceptable for tests only. JSON file storage is ac
 
 ### Background Job Kernel
 
-Core has initial background scheduling, cancellation ids, due-job lookup, progress events, hydration, and status transitions.
+Core has initial background scheduling, cancellation ids, due-job lookup, progress events, hydration, due-job execution through runtime policy, and status transitions.
 
 Still needed:
 
 - durable resume behavior
 - persist richer task state
-- execute due jobs through a daemon worker that re-checks policy before each resumed tool action
+- periodic daemon worker loop around the due-job executor
 - prevent stale elevated permissions
 
 The actual long-running behaviors should still be plugins.
@@ -164,7 +169,7 @@ No plugin or child agent should run indefinitely without an inspectable state an
 
 ### Plugin Installation From GitHub
 
-Core has plugin installer and manifest fetcher interfaces with manifest validation, schema compatibility checks, source pin planning, and permission summaries.
+Core has plugin installer and manifest fetcher interfaces with manifest validation, schema compatibility checks, source pin planning, permission summaries, and disabled-by-default local materialization.
 
 Still needed:
 

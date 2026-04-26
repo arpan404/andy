@@ -191,6 +191,15 @@ export class AgentKernel {
     );
   }
 
+  hydrateSessions(sessions: readonly AgentSession[]): Effect.Effect<void> {
+    return Effect.sync(() => {
+      this.#sessions.clear();
+      for (const session of sessions) {
+        this.#sessions.set(session.id, normalizeSessionDates(session));
+      }
+    });
+  }
+
   #createSession(input: AgentRunInput): AgentSession {
     const now = new Date();
     const messages: AgentMessage[] = [];
@@ -233,6 +242,14 @@ export class AgentKernel {
       }),
     );
   }
+}
+
+function normalizeSessionDates(session: AgentSession): AgentSession {
+  return {
+    ...session,
+    createdAt: new Date(session.createdAt),
+    updatedAt: new Date(session.updatedAt),
+  };
 }
 
 function applyOptionalTimeout<A, E, R>(
