@@ -17,6 +17,7 @@ Andy Core should stay small and trusted. It should provide the kernel, policy bo
 - Daemon remote control supports Telegram polling/webhook mode and WhatsApp webhook mode: inbound messages are normalized, published through the communication bridge, handled by an agent session using a configured AI SDK model provider, and replied to through the channel plugin.
 - Daemon HTTP ingress exposes health/status, approval list/decision endpoints, and Telegram/WhatsApp webhook endpoints with optional shared-secret verification.
 - Agent session kernel with AI SDK result types.
+- Agent requests can include image parts that are passed to Vercel AI SDK model messages for multimodal providers.
 - Bounded same-step tool-call execution with ordered tool-result messages.
 - Fully qualified internal tool names with ambiguity-safe local aliases.
 - AI SDK tool-name adapter that exposes model-safe tool names while mapping back to Andy qualified runtime tools.
@@ -162,7 +163,7 @@ The first-party plugin packages are now real subprocess-hosted packages with man
 
 - WhatsApp needs platform signature validation beyond the local shared-secret ingress guard.
 - Voice input needs a speech-to-text provider plugin and explicit microphone capture adapter.
-- Vision needs OCR and vision-model provider integration.
+- Vision now prepares image bytes for direct multimodal LLM input and has platform screenshot adapters. Remaining depth is provider-specific OCR helpers and screen-understanding workflows.
 - Computer control needs a richer accessibility adapter and cross-platform implementations.
 - Filesystem sensitive reads need a separate `filesystem.read_sensitive` tool and policy path.
 - Filesystem sensitive reads now have a separate `filesystem.read_sensitive` tool and critical capability path.

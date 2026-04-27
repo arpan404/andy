@@ -234,7 +234,7 @@ export class AgentKernel {
       if (systemPrompt && !messages.some((message) => message.role === "system")) {
         messages.unshift({ role: "system", content: systemPrompt });
       }
-      messages.push({ role: "user", content: input.userMessage });
+      messages.push(createUserMessage(input));
       return {
         ...existing,
         messages,
@@ -255,7 +255,7 @@ export class AgentKernel {
     if (systemPrompt) {
       messages.push({ role: "system", content: systemPrompt });
     }
-    messages.push({ role: "user", content: input.userMessage });
+    messages.push(createUserMessage(input));
 
     return {
       id: input.sessionId ?? crypto.randomUUID(),
@@ -301,6 +301,23 @@ function composeSystemPrompt(input: AgentRunInput): string | undefined {
     (part): part is string => typeof part === "string" && part.length > 0,
   );
   return parts.length > 0 ? parts.join("\n\n") : undefined;
+}
+
+function createUserMessage(input: AgentRunInput): AgentMessage {
+  if (!input.images || input.images.length === 0) {
+    return { role: "user", content: input.userMessage };
+  }
+  return {
+    role: "user",
+    content: [
+      { type: "text", text: input.userMessage },
+      ...input.images.map((image) => ({
+        type: "image" as const,
+        image: image.data,
+        ...(image.mediaType ? { mediaType: image.mediaType } : {}),
+      })),
+    ],
+  };
 }
 
 function applyOptionalTimeout<A, E, R>(

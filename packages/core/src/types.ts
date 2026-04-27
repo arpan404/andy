@@ -90,6 +90,10 @@ export interface AgentRunInput {
   systemPrompt?: string;
   skillInstructions?: string;
   userMessage: string;
+  images?: readonly {
+    data: string;
+    mediaType?: string;
+  }[];
   userId?: string;
   channelId?: string;
   conversationId?: string;

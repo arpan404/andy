@@ -17,7 +17,7 @@
   "tools": [
     {
       "name": "computer.click",
-      "description": "Click a screen coordinate after explicit policy approval.",
+      "description": "Click a screen coordinate through the current platform adapter after explicit policy approval.",
       "capabilities": ["computer.mouse"],
       "risk": "critical",
       "sandbox": {
@@ -28,7 +28,7 @@
     },
     {
       "name": "computer.type",
-      "description": "Type text into the active application after explicit policy approval.",
+      "description": "Type text into the active application through the current platform adapter after explicit policy approval.",
       "capabilities": ["computer.keyboard"],
       "risk": "critical",
       "sandbox": {
@@ -39,7 +39,7 @@
     },
     {
       "name": "computer.key",
-      "description": "Press a keyboard key after explicit policy approval.",
+      "description": "Press a keyboard key through the current platform adapter after explicit policy approval.",
       "capabilities": ["computer.keyboard"],
       "risk": "critical",
       "sandbox": {
@@ -50,7 +50,7 @@
     },
     {
       "name": "computer.window.list",
-      "description": "List visible applications through macOS accessibility APIs.",
+      "description": "List visible applications or windows through the current platform adapter.",
       "capabilities": [
         "computer.window",
         "computer.app",

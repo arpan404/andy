@@ -92,7 +92,11 @@ release.json
 The compiled `dist/andy` binary can manage a running daemon:
 
 ```bash
+./dist/andy setup --home ~/.andy-runtime
 ./dist/andy status
+./dist/andy config show
+./dist/andy config set-model-provider ai-sdk.openai.default --provider openai --model gpt-4.1-mini --api-key-env OPENAI_API_KEY --enable
+./dist/andy config remote telegram --enable --model-provider ai-sdk.openai.default
 ./dist/andy plugin list
 ./dist/andy plugin review-local plugins/memory-markdown/plugin.json
 ./dist/andy plugin install-local plugins/memory-markdown/plugin.json
@@ -102,10 +106,13 @@ The compiled `dist/andy` binary can manage a running daemon:
 ./dist/andy skill review-local skills/remember/skill.json
 ./dist/andy skill install-local skills/remember/skill.json --enable
 ./dist/andy skill run andy.skills.remember --workflow save --input '{"key":"editor","value":"vim"}'
+./dist/andy ask --image /path/to/screenshot.png "What is visible here?"
 ./dist/andy approval list
 ```
 
 Use `--url http://host:port` or `ANDY_DAEMON_URL` to target a daemon that is not listening on `http://127.0.0.1:8765`.
+
+`andy setup` can run before the daemon is already running. It creates the selected home directory and initializes `.andy/daemon.json` by invoking the sibling `andy-daemon --init` binary. Use `--force` only when intentionally recreating that config.
 
 ## Validation
 

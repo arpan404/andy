@@ -99,8 +99,8 @@ This list tracks the first production path now that the core kernel is ready eno
 - Added `@andy/plugin-telegram` with official Bot API polling, send message, webhook configuration, and update normalization tools.
 - Added `@andy/plugin-whatsapp` with official Meta Graph API send, webhook verification, and webhook normalization tools.
 - Added `@andy/plugin-voice-input` and `@andy/plugin-voice-output` capability surfaces for explicit activation, transcript handoff, and local speech output.
-- Added `@andy/plugin-vision` for screen capture and image/OCR provider handoff surfaces.
-- Added `@andy/plugin-computer-control` for gated macOS accessibility actions, disabled unless `ANDY_ENABLE_COMPUTER_CONTROL=1`.
+- Added `@andy/plugin-vision` for cross-platform screenshot capture and AI SDK image-part preparation for multimodal LLMs.
+- Added `@andy/plugin-computer-control` for gated cross-platform mouse, keyboard, key, and window-list adapters, disabled unless `ANDY_ENABLE_COMPUTER_CONTROL=1`.
 - Added `@andy/plugin-background-worker` for durable background task request, schedule, and cancellation records in plugin-owned storage.
 - Added `@andy/plugin-notifications` for notification and approval-request delivery records.
 - Added `@andy/plugin-swarm-orchestrator` for bounded swarm plan, spawn, delegate, join, and cancel records behind manifest limits.
@@ -121,6 +121,12 @@ This list tracks the first production path now that the core kernel is ready eno
 - Added AI SDK Anthropic and Google provider adapters alongside OpenAI.
 - Added `filesystem.read_sensitive` as a separate critical capability with explicit sensitive roots.
 - Added a local `@andy/web` console for daemon status, plugin/skill visibility, and skill execution.
+- Added `andy setup` for first-run home/config initialization.
+- Added daemon/CLI config management for model providers and Telegram/WhatsApp remote-control settings.
+- Extended the web console with plugin and skill enable/disable actions, approval decisions, and skill-aware agent requests.
+- Added macOS local notification dispatch as a best-effort native delivery path in the notifications plugin.
+- Tightened computer-control key handling with named key-code support while preserving policy/env gating.
+- Added `andy ask --image <path>` and daemon `/agent/run` image payloads so multimodal AI SDK providers receive images directly.
 
 ### Release Packaging
 

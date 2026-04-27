@@ -8,6 +8,7 @@ import type { JsonValue } from "@andy/types";
 import { Effect } from "effect";
 import { readFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
+import { platform } from "node:os";
 
 startWorkerPlugin((request) =>
   Effect.fn("vision.handleRequest")(function* () {
@@ -30,8 +31,13 @@ function capture(input: JsonValue): Effect.Effect<JsonValue, unknown> {
   return Effect.fn("vision.capture")(function* () {
     const parsed = requireObject(input, "screen.capture");
     const outputPath = requireString(parsed, "outputPath");
-    return yield* runCommand("screencapture", ["-x", outputPath], 30_000).pipe(
-      Effect.map(() => ({ outputPath, captured: true })),
+    return yield* captureScreenshot(outputPath).pipe(
+      Effect.map((backend) => ({
+        outputPath,
+        captured: true,
+        platform: platform(),
+        backend,
+      })),
     );
   })();
 }
@@ -49,8 +55,13 @@ function describe(input: JsonValue): Effect.Effect<JsonValue, unknown> {
       imagePath: imagePath ?? null,
       bytes: bytes.byteLength,
       mediaType: detectImageType(bytes),
+      aiSdkImage: {
+        type: "image",
+        image: bytes.toString("base64"),
+        mediaType: detectImageType(bytes),
+      },
       description:
-        "Image bytes are available. Detailed visual reasoning is delegated to a model/vision provider plugin.",
+        "Image bytes are prepared for direct multimodal LLM input through the AI SDK image part format.",
     };
   })();
 }
@@ -79,11 +90,81 @@ function detectImageType(bytes: Buffer): string {
   return "application/octet-stream";
 }
 
-function runCommand(command: string, args: string[], timeoutMs: number) {
+function captureScreenshot(outputPath: string): Effect.Effect<string, unknown> {
+  const currentPlatform = platform();
+  if (currentPlatform === "darwin") {
+    return runFirstAvailable([
+      { command: "screencapture", args: ["-x", outputPath], backend: "screencapture" },
+    ]);
+  }
+  if (currentPlatform === "linux") {
+    return runFirstAvailable([
+      {
+        command: "gnome-screenshot",
+        args: ["-f", outputPath],
+        backend: "gnome-screenshot",
+      },
+      {
+        command: "import",
+        args: ["-window", "root", outputPath],
+        backend: "imagemagick-import",
+      },
+      { command: "scrot", args: [outputPath], backend: "scrot" },
+    ]);
+  }
+  if (currentPlatform === "win32") {
+    return runCommand(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        windowsScreenshotScript(outputPath),
+      ],
+      30_000,
+    ).pipe(Effect.as("powershell"));
+  }
+  return Effect.fail(
+    new Error(`Screen capture is not supported on platform '${currentPlatform}'.`),
+  );
+}
+
+function runFirstAvailable(
+  candidates: readonly { command: string; args: readonly string[]; backend: string }[],
+): Effect.Effect<string, unknown> {
+  const [candidate, ...rest] = candidates;
+  if (!candidate) {
+    return Effect.fail(new Error("No screenshot backend is available."));
+  }
+  return runCommand(candidate.command, candidate.args, 30_000).pipe(
+    Effect.as(candidate.backend),
+    Effect.catchAll((error) =>
+      rest.length > 0 ? runFirstAvailable(rest) : Effect.fail(error),
+    ),
+  );
+}
+
+function windowsScreenshotScript(outputPath: string): string {
+  return `
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+$bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+$graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+$graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+$bitmap.Save(${JSON.stringify(outputPath)})
+$graphics.Dispose()
+$bitmap.Dispose()
+`;
+}
+
+function runCommand(command: string, args: readonly string[], timeoutMs: number) {
   return Effect.tryPromise({
     try: () =>
       new Promise<void>((resolve, reject) => {
-        const child = spawn(command, args, { shell: false });
+        const child = spawn(command, [...args], { shell: false });
         const timer = setTimeout(() => {
           child.kill("SIGTERM");
           reject(new Error(`${command} timed out.`));

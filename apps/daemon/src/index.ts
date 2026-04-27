@@ -749,9 +749,10 @@ function parseConfig(value: unknown): DaemonConfig {
     ),
     plugins: mergePluginDefaults(record.plugins, defaults.plugins),
     skills: mergeSkillDefaults(record.skills, defaults.skills),
-    modelProviders: Array.isArray(record.modelProviders)
-      ? record.modelProviders.flatMap(parseModelProviderConfig)
-      : defaults.modelProviders,
+    modelProviders: mergeModelProviderDefaults(
+      record.modelProviders,
+      defaults.modelProviders,
+    ),
     remoteControl: parseRemoteControlConfig(record.remoteControl),
     http: parseHttpConfig(record.http),
   };
@@ -792,6 +793,23 @@ function mergeSkillDefaults(
     byPath.set(skill.manifestPath, skill);
   }
   return [...byPath.values()];
+}
+
+function mergeModelProviderDefaults(
+  value: unknown,
+  defaults: readonly DaemonModelProviderConfig[],
+): DaemonModelProviderConfig[] {
+  const configured = Array.isArray(value)
+    ? value.flatMap(parseModelProviderConfig)
+    : [];
+  const byId = new Map<string, DaemonModelProviderConfig>();
+  for (const provider of defaults) {
+    byId.set(provider.id, provider);
+  }
+  for (const provider of configured) {
+    byId.set(provider.id, provider);
+  }
+  return [...byId.values()];
 }
 
 function createDefaultPolicyConfig(config: DaemonConfig): PolicyConfig {
@@ -940,6 +958,19 @@ function createStatus(booted: BootedDaemon) {
     })),
     eventCount: booted.services.eventBus.replay().length,
     traceCount: booted.services.traces.list().length,
+  };
+}
+
+function sanitizeConfig(config: DaemonConfig) {
+  return {
+    ...config,
+    modelProviders: config.modelProviders.map((provider) => ({
+      ...provider,
+      apiKeyConfigured:
+        provider.apiKeyEnv && provider.apiKeyEnv in process.env
+          ? Boolean(process.env[provider.apiKeyEnv])
+          : false,
+    })),
   };
 }
 
@@ -1181,6 +1212,39 @@ function handleHttpRequest(
     }
     if (request.method === "GET" && url.pathname === "/status") {
       writeJson(response, 200, createStatus(booted));
+      return;
+    }
+    if (request.method === "GET" && url.pathname === "/config") {
+      writeJson(response, 200, { config: sanitizeConfig(booted.config) });
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/config/model-provider") {
+      const body = yield* readJsonBody(request);
+      const result = yield* upsertModelProviderConfig(booted, body);
+      writeJson(response, 200, result);
+      return;
+    }
+    const modelProviderActionMatch = url.pathname.match(
+      /^\/config\/model-provider\/([^/]+)\/(enable|disable)$/,
+    );
+    if (request.method === "POST" && modelProviderActionMatch) {
+      const [, providerId, action] = modelProviderActionMatch;
+      if (!providerId || !action) {
+        writeJson(response, 404, { error: "not_found" });
+        return;
+      }
+      const result = yield* setModelProviderEnabled(
+        booted,
+        providerId,
+        action === "enable",
+      );
+      writeJson(response, 200, result);
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/config/remote-control") {
+      const body = yield* readJsonBody(request);
+      const result = yield* updateRemoteControlConfig(booted, body);
+      writeJson(response, 200, result);
       return;
     }
     if (request.method === "GET" && url.pathname === "/approvals") {
@@ -1433,6 +1497,151 @@ function installLocalPlugin(
       ),
       plan: serializeInstallPlan(plan),
     };
+  })();
+}
+
+function upsertModelProviderConfig(
+  booted: BootedDaemon,
+  body: JsonValue,
+): Effect.Effect<
+  { config: ReturnType<typeof sanitizeConfig>; restartRequired: boolean },
+  unknown
+> {
+  return Effect.fn("daemon.upsertModelProviderConfig")(function* () {
+    const payload = isJsonObject(body)
+      ? (body as {
+          id?: unknown;
+          provider?: unknown;
+          modelId?: unknown;
+          apiKeyEnv?: unknown;
+          enabled?: unknown;
+          baseURL?: unknown;
+          organization?: unknown;
+          project?: unknown;
+        })
+      : {};
+    const id = typeof payload.id === "string" ? payload.id : "";
+    const provider = typeof payload.provider === "string" ? payload.provider : "";
+    const modelId = typeof payload.modelId === "string" ? payload.modelId : "";
+    if (!id || !modelId) {
+      throw new Error("id and modelId are required.");
+    }
+    if (
+      provider !== "ai-sdk.openai" &&
+      provider !== "ai-sdk.anthropic" &&
+      provider !== "ai-sdk.google"
+    ) {
+      throw new Error(
+        "provider must be ai-sdk.openai, ai-sdk.anthropic, or ai-sdk.google.",
+      );
+    }
+
+    const nextProvider: DaemonModelProviderConfig = {
+      id,
+      provider,
+      enabled: payload.enabled === true,
+      modelId,
+      ...(typeof payload.apiKeyEnv === "string"
+        ? { apiKeyEnv: payload.apiKeyEnv }
+        : {}),
+      ...(typeof payload.baseURL === "string" ? { baseURL: payload.baseURL } : {}),
+      ...(typeof payload.organization === "string"
+        ? { organization: payload.organization }
+        : {}),
+      ...(typeof payload.project === "string" ? { project: payload.project } : {}),
+    };
+    const existingIndex = booted.config.modelProviders.findIndex(
+      (item) => item.id === id,
+    );
+    if (existingIndex >= 0) {
+      booted.config.modelProviders[existingIndex] = nextProvider;
+    } else {
+      booted.config.modelProviders.push(nextProvider);
+    }
+    yield* writeConfig(booted.configPath, booted.config);
+    return { config: sanitizeConfig(booted.config), restartRequired: true };
+  })();
+}
+
+function setModelProviderEnabled(
+  booted: BootedDaemon,
+  providerId: string,
+  enabled: boolean,
+): Effect.Effect<
+  { config: ReturnType<typeof sanitizeConfig>; restartRequired: boolean },
+  unknown
+> {
+  return Effect.fn("daemon.setModelProviderEnabled")(function* () {
+    const provider = booted.config.modelProviders.find(
+      (item) => item.id === providerId,
+    );
+    if (!provider) {
+      throw new Error(`Unknown model provider '${providerId}'.`);
+    }
+    provider.enabled = enabled;
+    yield* writeConfig(booted.configPath, booted.config);
+    return { config: sanitizeConfig(booted.config), restartRequired: true };
+  })();
+}
+
+function updateRemoteControlConfig(
+  booted: BootedDaemon,
+  body: JsonValue,
+): Effect.Effect<
+  { config: ReturnType<typeof sanitizeConfig>; restartRequired: boolean },
+  unknown
+> {
+  return Effect.fn("daemon.updateRemoteControlConfig")(function* () {
+    const payload = isJsonObject(body)
+      ? (body as {
+          channel?: unknown;
+          enabled?: unknown;
+          modelProviderId?: unknown;
+          pollMs?: unknown;
+          systemPrompt?: unknown;
+        })
+      : {};
+    const channel = typeof payload.channel === "string" ? payload.channel : "";
+    if (channel !== "telegram" && channel !== "whatsapp") {
+      throw new Error("channel must be telegram or whatsapp.");
+    }
+    const current =
+      channel === "telegram"
+        ? booted.config.remoteControl.telegram
+        : booted.config.remoteControl.whatsapp;
+    const next = {
+      enabled: payload.enabled === true,
+      modelProviderId:
+        typeof payload.modelProviderId === "string"
+          ? payload.modelProviderId
+          : (current?.modelProviderId ?? "ai-sdk.openai.default"),
+      ...(channel === "telegram"
+        ? {
+            pollMs:
+              typeof payload.pollMs === "number" && payload.pollMs > 0
+                ? payload.pollMs
+                : ((
+                    current as
+                      | NonNullable<DaemonRemoteControlConfig["telegram"]>
+                      | undefined
+                  )?.pollMs ?? 3000),
+          }
+        : {}),
+      ...(typeof payload.systemPrompt === "string"
+        ? { systemPrompt: payload.systemPrompt }
+        : current?.systemPrompt
+          ? { systemPrompt: current.systemPrompt }
+          : {}),
+    };
+    if (channel === "telegram") {
+      booted.config.remoteControl.telegram = next as NonNullable<
+        DaemonRemoteControlConfig["telegram"]
+      >;
+    } else {
+      booted.config.remoteControl.whatsapp = next;
+    }
+    yield* writeConfig(booted.configPath, booted.config);
+    return { config: sanitizeConfig(booted.config), restartRequired: true };
   })();
 }
 
@@ -1756,6 +1965,7 @@ function runAgentRequest(
           systemPrompt?: unknown;
           skillIds?: unknown;
           sessionId?: unknown;
+          images?: unknown;
         })
       : {};
     const message = typeof payload.message === "string" ? payload.message : "";
@@ -1769,6 +1979,7 @@ function runAgentRequest(
     const skillIds = Array.isArray(payload.skillIds)
       ? payload.skillIds.filter((item): item is string => typeof item === "string")
       : [];
+    const images = yield* normalizeAgentImages(payload.images);
     const runner = yield* booted.services.modelProviders.createRunner(modelProviderId);
     const kernel = new AgentKernel({
       runtime: booted.services.runtime,
@@ -1787,6 +1998,7 @@ function runAgentRequest(
       ...(skillIds.length > 0
         ? { skillInstructions: yield* buildSkillInstructions(booted, skillIds) }
         : {}),
+      ...(images.length > 0 ? { images } : {}),
     });
     yield* booted.services.saveState();
     return { response: result.response, sessionId: result.session.id };
@@ -1809,6 +2021,66 @@ function buildSkillInstructions(
     }
     return `Use these installed Andy skills when relevant. Skills are declarative guidance; execute actions only through available tools.\n\n${sections.join("\n\n")}`;
   })();
+}
+
+function normalizeAgentImages(
+  value: unknown,
+): Effect.Effect<readonly { data: string; mediaType?: string }[], unknown> {
+  return Effect.fn("daemon.normalizeAgentImages")(function* () {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+    const images: { data: string; mediaType?: string }[] = [];
+    for (const item of value) {
+      if (!isJsonObject(item)) {
+        continue;
+      }
+      const data = optionalJsonString(item, "data");
+      const imageBase64 = optionalJsonString(item, "imageBase64");
+      const path = optionalJsonString(item, "path");
+      const mediaType = optionalJsonString(item, "mediaType");
+      if (data ?? imageBase64) {
+        images.push({
+          data: data ?? imageBase64 ?? "",
+          ...(mediaType ? { mediaType } : {}),
+        });
+        continue;
+      }
+      if (path) {
+        const bytes = yield* Effect.tryPromise({
+          try: () => readFile(path),
+          catch: (cause) => cause,
+        });
+        images.push({
+          data: bytes.toString("base64"),
+          mediaType: mediaType ?? detectImageMediaType(bytes),
+        });
+      }
+    }
+    return images;
+  })();
+}
+
+function optionalJsonString(object: JsonObject, key: string): string | undefined {
+  const value = object[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function detectImageMediaType(bytes: Buffer): string {
+  if (
+    bytes
+      .subarray(0, 8)
+      .equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+  ) {
+    return "image/png";
+  }
+  if (bytes.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]))) {
+    return "image/jpeg";
+  }
+  if (bytes.subarray(0, 4).toString("utf8") === "RIFF") {
+    return "image/webp";
+  }
+  return "application/octet-stream";
 }
 
 function formatSkillForPrompt(skill: InstalledSkillRecord): string {

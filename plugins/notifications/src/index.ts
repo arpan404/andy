@@ -6,7 +6,9 @@ import {
 } from "@andy/plugin-worker";
 import type { JsonValue } from "@andy/types";
 import { Effect } from "effect";
+import { spawn } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { platform } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
@@ -55,7 +57,8 @@ function sendNotification(input: JsonValue): Effect.Effect<JsonValue, unknown> {
       channel: optionalString(parsed, "channel") ?? "local",
       urgency: optionalString(parsed, "urgency") ?? "normal",
     });
-    return { ...record, sent: true, delivery: "plugin-storage" };
+    const delivery = yield* dispatchLocalNotification(record);
+    return { ...record, sent: true, delivery };
   })();
 }
 
@@ -77,8 +80,28 @@ function createApprovalNotification(
       urgency: "high",
       approvalId,
     });
-    return { ...record, sent: true, approveCommand: `/approve ${approvalId}` };
+    const delivery = yield* dispatchLocalNotification(record);
+    return {
+      ...record,
+      sent: true,
+      delivery,
+      approveCommand: `/approve ${approvalId}`,
+    };
   })();
+}
+
+function dispatchLocalNotification(
+  notification: NotificationRecord,
+): Effect.Effect<string, never> {
+  if (notification.channel !== "local" || platform() !== "darwin") {
+    return Effect.succeed("plugin-storage");
+  }
+  return osascript([
+    `display notification ${JSON.stringify(notification.text)} with title ${JSON.stringify(notification.title)}`,
+  ]).pipe(
+    Effect.as("macos-notification"),
+    Effect.catchAll(() => Effect.succeed("plugin-storage")),
+  );
 }
 
 function appendNotification(
@@ -122,6 +145,32 @@ function saveNotifications(
       `${JSON.stringify(notifications, null, 2)}\n`,
       "utf8",
     );
+  });
+}
+
+function osascript(lines: string[]): Effect.Effect<string, unknown> {
+  return Effect.tryPromise({
+    try: () =>
+      new Promise<string>((resolveOutput, reject) => {
+        const child = spawn(
+          "osascript",
+          lines.flatMap((line) => ["-e", line]),
+          { shell: false },
+        );
+        let stdout = "";
+        let stderr = "";
+        child.stdout.on("data", (chunk: Buffer) => {
+          stdout += chunk.toString("utf8");
+        });
+        child.stderr.on("data", (chunk: Buffer) => {
+          stderr += chunk.toString("utf8");
+        });
+        child.once("error", reject);
+        child.once("exit", (code) => {
+          code === 0 ? resolveOutput(stdout) : reject(new Error(stderr));
+        });
+      }),
+    catch: (cause) => cause,
   });
 }
 

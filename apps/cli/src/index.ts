@@ -5,6 +5,10 @@ import { definePlugin, defineTool } from "@andy/plugin-sdk";
 import { CapabilityPolicy } from "@andy/policy";
 import { getJsonObjectProperty, isJsonObject, type JsonValue } from "@andy/types";
 import { Effect } from "effect";
+import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 
 type HttpMethod = "GET" | "POST";
 
@@ -18,6 +22,15 @@ interface ParsedArgs {
   input?: JsonValue;
   skills: string[];
   modelProviderId?: string;
+  home?: string;
+  force: boolean;
+  provider?: string;
+  model?: string;
+  apiKeyEnv?: string;
+  disable: boolean;
+  channel?: string;
+  pollMs?: number;
+  images: { path: string; mediaType?: string }[];
 }
 
 const corePlugin = definePlugin({
@@ -50,6 +63,10 @@ const parsed = parseArgs(process.argv.slice(2));
 
 if (parsed.command === "status") {
   await printDaemonJson(parsed.url, "GET", "/status");
+} else if (parsed.command === "setup") {
+  await runSetupCommand(parsed);
+} else if (parsed.command === "config") {
+  await runConfigCommand(parsed);
 } else if (parsed.command === "plugin" || parsed.command === "plugins") {
   await runPluginCommand(parsed);
 } else if (parsed.command === "skill" || parsed.command === "skills") {
@@ -64,6 +81,101 @@ if (parsed.command === "status") {
   await runLegacySmoke(process.argv.slice(2).join(" "));
 }
 
+async function runSetupCommand(args: ParsedArgs): Promise<void> {
+  const { ANDY_HOME } = process.env;
+  const home = resolve(args.home ?? ANDY_HOME ?? process.cwd());
+  await mkdir(home, { recursive: true });
+  const configPath = join(home, ".andy", "daemon.json");
+  if (existsSync(configPath) && !args.force) {
+    console.log(
+      JSON.stringify(
+        {
+          status: "exists",
+          home,
+          configPath,
+          next: ["Config already exists. Use --force to recreate it."],
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+  const daemonPath = findDaemonBinary();
+  const result = await spawnAndCollect(daemonPath, ["--init"], { ANDY_HOME: home });
+  if (result.exitCode !== 0 && !args.force) {
+    throw new Error(result.stderr || `andy-daemon --init exited ${result.exitCode}`);
+  }
+  console.log(
+    JSON.stringify(
+      {
+        status: "ready",
+        home,
+        configPath,
+        next: [
+          "Start the daemon with ANDY_HOME set to this directory.",
+          "Use `andy config show` after the daemon is running.",
+        ],
+      },
+      null,
+      2,
+    ),
+  );
+}
+
+async function runConfigCommand(args: ParsedArgs): Promise<void> {
+  const [action, subject, value] = args.rest;
+  if (!action || action === "show") {
+    await printDaemonJson(args.url, "GET", "/config");
+    return;
+  }
+  if (action === "set-model-provider") {
+    const id = subject;
+    if (!id || !args.provider || !args.model) {
+      throw new Error(
+        "Usage: andy config set-model-provider <id> --provider openai|anthropic|google --model <modelId> [--api-key-env ENV] [--enable]",
+      );
+    }
+    await printDaemonJson(args.url, "POST", "/config/model-provider", {
+      id,
+      provider: normalizeProvider(args.provider),
+      modelId: args.model,
+      ...(args.apiKeyEnv ? { apiKeyEnv: args.apiKeyEnv } : {}),
+      enabled: args.enable,
+    });
+    return;
+  }
+  if (action === "enable-model-provider" || action === "disable-model-provider") {
+    const id = subject;
+    if (!id) {
+      throw new Error(`Usage: andy config ${action} <id>`);
+    }
+    await printDaemonJson(
+      args.url,
+      "POST",
+      `/config/model-provider/${id}/${action.startsWith("enable") ? "enable" : "disable"}`,
+    );
+    return;
+  }
+  if (action === "remote") {
+    const channel = subject ?? args.channel;
+    if (channel !== "telegram" && channel !== "whatsapp") {
+      throw new Error(
+        "Usage: andy config remote <telegram|whatsapp> [--enable|--disable] [--model-provider id]",
+      );
+    }
+    await printDaemonJson(args.url, "POST", "/config/remote-control", {
+      channel,
+      enabled: args.enable && !args.disable,
+      ...(args.modelProviderId ? { modelProviderId: args.modelProviderId } : {}),
+      ...(args.pollMs ? { pollMs: args.pollMs } : {}),
+      ...(value ? { systemPrompt: value } : {}),
+    });
+    return;
+  }
+  throw new Error(`Unknown config command '${action}'.`);
+}
+
 async function runAskCommand(args: ParsedArgs): Promise<void> {
   const message = args.rest.join(" ").trim();
   if (!message) {
@@ -73,6 +185,7 @@ async function runAskCommand(args: ParsedArgs): Promise<void> {
     message,
     skillIds: args.skills,
     ...(args.modelProviderId ? { modelProviderId: args.modelProviderId } : {}),
+    ...(args.images.length > 0 ? { images: args.images } : {}),
   });
 }
 
@@ -241,6 +354,15 @@ function parseArgs(input: string[]): ParsedArgs {
   let url = ANDY_DAEMON_URL ?? "http://127.0.0.1:8765";
   let enable = false;
   let manifestPath: string | undefined;
+  let home: string | undefined;
+  let provider: string | undefined;
+  let model: string | undefined;
+  let apiKeyEnv: string | undefined;
+  let channel: string | undefined;
+  let pollMs: number | undefined;
+  const images: { path: string; mediaType?: string }[] = [];
+  let force = false;
+  let disable = false;
   const positional: string[] = [];
 
   for (let index = 0; index < input.length; index += 1) {
@@ -256,6 +378,79 @@ function parseArgs(input: string[]): ParsedArgs {
     }
     if (arg === "--enable") {
       enable = true;
+      continue;
+    }
+    if (arg === "--disable") {
+      disable = true;
+      continue;
+    }
+    if (arg === "--force") {
+      force = true;
+      continue;
+    }
+    if (arg === "--home") {
+      const value = input[index + 1];
+      if (!value) {
+        throw new Error("--home requires a value.");
+      }
+      home = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--provider") {
+      const value = input[index + 1];
+      if (!value) {
+        throw new Error("--provider requires a value.");
+      }
+      provider = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--model") {
+      const value = input[index + 1];
+      if (!value) {
+        throw new Error("--model requires a value.");
+      }
+      model = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--api-key-env") {
+      const value = input[index + 1];
+      if (!value) {
+        throw new Error("--api-key-env requires a value.");
+      }
+      apiKeyEnv = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--channel") {
+      const value = input[index + 1];
+      if (!value) {
+        throw new Error("--channel requires a value.");
+      }
+      channel = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--poll-ms") {
+      const value = input[index + 1];
+      const parsed = value ? Number(value) : Number.NaN;
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        throw new Error("--poll-ms requires a positive number.");
+      }
+      pollMs = parsed;
+      index += 1;
+      continue;
+    }
+    if (arg === "--image") {
+      const value = input[index + 1];
+      if (!value) {
+        throw new Error("--image requires a file path.");
+      }
+      const mediaType = guessImageMediaType(value);
+      images.push({ path: value, ...(mediaType ? { mediaType } : {}) });
+      index += 1;
       continue;
     }
     if (arg === "--manifest") {
@@ -322,6 +517,9 @@ function parseArgs(input: string[]): ParsedArgs {
       ),
     url: trimTrailingSlash(url),
     enable,
+    force,
+    disable,
+    images,
     skills: skillsMarker
       ? skillsMarker
           .slice("__skills:".length)
@@ -330,6 +528,12 @@ function parseArgs(input: string[]): ParsedArgs {
           .filter(Boolean)
       : [],
     ...(manifestPath ? { manifestPath } : {}),
+    ...(home ? { home } : {}),
+    ...(provider ? { provider } : {}),
+    ...(model ? { model } : {}),
+    ...(apiKeyEnv ? { apiKeyEnv } : {}),
+    ...(channel ? { channel } : {}),
+    ...(pollMs ? { pollMs } : {}),
     ...(workflowMarker ? { workflow: workflowMarker.slice("__workflow:".length) } : {}),
     ...(modelProviderMarker
       ? { modelProviderId: modelProviderMarker.slice("__modelProvider:".length) }
@@ -338,6 +542,60 @@ function parseArgs(input: string[]): ParsedArgs {
       ? { input: parseJsonResponse(inputMarker.slice("__input:".length)) }
       : {}),
   };
+}
+
+function guessImageMediaType(path: string): string | undefined {
+  const lower = path.toLowerCase();
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".webp")) return "image/webp";
+  if (lower.endsWith(".gif")) return "image/gif";
+  return undefined;
+}
+
+function normalizeProvider(provider: string): string {
+  if (provider.startsWith("ai-sdk.")) {
+    return provider;
+  }
+  return `ai-sdk.${provider}`;
+}
+
+function findDaemonBinary(): string {
+  const candidates = [
+    resolve(dirname(process.execPath), "andy-daemon"),
+    resolve(process.cwd(), "dist", "andy-daemon"),
+    resolve(process.cwd(), "bin", "andy-daemon"),
+  ];
+  const found = candidates.find((candidate) => existsSync(candidate));
+  if (!found) {
+    throw new Error("Could not find andy-daemon next to the CLI or under ./dist.");
+  }
+  return found;
+}
+
+async function spawnAndCollect(
+  command: string,
+  args: string[],
+  env: Record<string, string>,
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  return new Promise((resolveResult, reject) => {
+    const child = spawn(command, args, {
+      shell: false,
+      env: { ...process.env, ...env },
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.once("error", reject);
+    child.once("exit", (code) => {
+      resolveResult({ exitCode: code ?? 1, stdout, stderr });
+    });
+  });
 }
 
 function parseJsonResponse(text: string): JsonValue {
@@ -369,8 +627,14 @@ function printHelp(): void {
   console.log(`Andy CLI
 
 Usage:
+  andy setup [--home path] [--force]
   andy status [--url http://127.0.0.1:8765]
-  andy ask [--skills skill.a,skill.b] [--model-provider id] <message>
+  andy config show
+  andy config set-model-provider <id> --provider openai|anthropic|google --model <modelId> [--api-key-env ENV] [--enable]
+  andy config enable-model-provider <id>
+  andy config disable-model-provider <id>
+  andy config remote <telegram|whatsapp> [--enable|--disable] [--model-provider id] [--poll-ms ms]
+  andy ask [--skills skill.a,skill.b] [--model-provider id] [--image path] <message>
   andy plugin list
   andy plugin install-local <manifestPath> [--enable]
   andy plugin review-local <manifestPath>

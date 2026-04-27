@@ -227,9 +227,9 @@ Implemented first-party system plugins:
 - `@andy/plugin-shell` runs commands without shell interpolation, requires a declared `cwd` root, bounds output, and is expected to be approval-gated by policy.
 - `@andy/plugin-telegram` uses the official Telegram Bot API for polling, send, webhook setup, and update normalization.
 - `@andy/plugin-whatsapp` uses the official Meta Graph API for outbound messages and webhook payload verification/normalization.
-- `@andy/plugin-voice-input`, `@andy/plugin-voice-output`, `@andy/plugin-vision`, and `@andy/plugin-computer-control` expose strict capability surfaces while native capture/provider depth is added incrementally.
+- `@andy/plugin-voice-input`, `@andy/plugin-voice-output`, `@andy/plugin-vision`, and `@andy/plugin-computer-control` expose strict capability surfaces while native capture/provider depth is added incrementally. Voice output uses macOS `say` where available. Vision captures screenshots through platform adapters (`screencapture`, `gnome-screenshot`/`import`/`scrot`, or PowerShell) and prepares AI SDK image parts so multimodal LLMs can receive images directly. Computer control uses platform adapters for macOS (`osascript`), Linux (`xdotool`/`wmctrl`), and Windows (PowerShell/User32/SendKeys), and remains gated by `ANDY_ENABLE_COMPUTER_CONTROL=1` plus policy approval.
 - `@andy/plugin-background-worker` persists background task requests, scheduled task records, and cancellation state inside plugin storage; privileged resumed work still re-enters core policy.
-- `@andy/plugin-notifications` records notification and approval-request deliveries through a manifest-declared notification surface.
+- `@andy/plugin-notifications` records notification and approval-request deliveries through a manifest-declared notification surface and best-effort macOS local notifications for `channel: "local"`.
 - `@andy/plugin-swarm-orchestrator` manages bounded swarm plan/spawn/delegate/join/cancel state inside the manifest's agent-count, depth, role, and capability limits.
 - `@andy/plugin-memory-persistent` stores structured persistent memory records in plugin-owned JSON storage with save/fetch/query/list/forget tools.
 - `@andy/plugin-memory-semantic` stores inspectable semantic memory records with a deterministic local vector index; it does not hide memory solely inside an opaque vector database.

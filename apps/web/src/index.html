@@ -54,6 +54,33 @@
           <div id="skills" class="list"></div>
         </div>
 
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Approvals</h2>
+          </div>
+          <div id="approvals" class="list"></div>
+        </div>
+
+        <div class="panel command">
+          <div class="panel-head">
+            <h2>Agent Request</h2>
+          </div>
+          <label
+            >Skill IDs <input id="askSkills" placeholder="andy.skills.effect-ts-coding"
+          /></label>
+          <label
+            >Message
+            <textarea id="askMessage">
+Use the selected skills and summarize daemon status.</textarea
+            >
+          </label>
+          <label
+            >Image Path
+            <input id="askImage" placeholder="/absolute/path/to/screenshot.png"
+          /></label>
+          <button id="askAgent" type="button">Run Agent</button>
+        </div>
+
         <div class="panel command">
           <div class="panel-head">
             <h2>Run Skill</h2>

@@ -1,9 +1,11 @@
 const daemonUrl = document.querySelector<HTMLInputElement>("#daemonUrl");
 const refresh = document.querySelector<HTMLButtonElement>("#refresh");
 const runSkill = document.querySelector<HTMLButtonElement>("#runSkill");
+const askAgent = document.querySelector<HTMLButtonElement>("#askAgent");
 
 refresh?.addEventListener("click", () => void load());
 runSkill?.addEventListener("click", () => void runSelectedSkill());
+askAgent?.addEventListener("click", () => void runAgentRequest());
 void load();
 
 async function load() {
@@ -12,8 +14,14 @@ async function load() {
   setText("#pluginCount", String(asArray(status.installedPlugins).length));
   setText("#skillCount", String(asArray(status.skills).length));
   setText("#approvalCount", String(asArray(status.approvals).length));
-  renderList("#plugins", asRecordArray(status.installedPlugins), "pluginId");
-  renderList("#skills", asRecordArray(status.skills), "skillId");
+  renderLifecycleList(
+    "#plugins",
+    asRecordArray(status.installedPlugins),
+    "pluginId",
+    "plugins",
+  );
+  renderLifecycleList("#skills", asRecordArray(status.skills), "skillId", "skills");
+  renderApprovalList("#approvals", asRecordArray(status.approvals));
 }
 
 async function runSelectedSkill() {
@@ -23,6 +31,22 @@ async function runSelectedSkill() {
   const result = await request(`/skills/${encodeURIComponent(skillId)}/run`, {
     method: "POST",
     body: JSON.stringify({ workflow, input }),
+  });
+  setText("#output", JSON.stringify(result, null, 2));
+}
+
+async function runAgentRequest() {
+  const skillIds = value("#askSkills")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const result = await request("/agent/run", {
+    method: "POST",
+    body: JSON.stringify({
+      message: value("#askMessage"),
+      skillIds,
+      images: value("#askImage") ? [{ path: value("#askImage") }] : [],
+    }),
   });
   setText("#output", JSON.stringify(result, null, 2));
 }
@@ -44,17 +68,72 @@ async function request(path: string, init?: RequestInit): Promise<DaemonStatus> 
 }
 
 interface ListRecord extends Record<string, unknown> {
+  id?: unknown;
   status?: unknown;
 }
 
-function renderList(selector: string, items: readonly ListRecord[], idKey: string) {
+function renderLifecycleList(
+  selector: string,
+  items: readonly ListRecord[],
+  idKey: string,
+  apiRoot: "plugins" | "skills",
+) {
   const node = document.querySelector(selector);
   if (!node) return;
   node.innerHTML = "";
   for (const item of items) {
+    const id = String(item[idKey]);
+    const status = String(item.status ?? "");
     const row = document.createElement("div");
     row.className = "row";
-    row.innerHTML = `<strong>${escapeHtml(String(item[idKey]))}</strong><small>${escapeHtml(String(item.status ?? ""))}</small>`;
+    row.innerHTML = `<div><strong>${escapeHtml(id)}</strong><small>${escapeHtml(status)}</small></div>`;
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    for (const action of status === "enabled" ? ["disable"] : ["enable"]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = action;
+      button.addEventListener("click", async () => {
+        await request(`/${apiRoot}/${encodeURIComponent(id)}/${action}`, {
+          method: "POST",
+          body: "{}",
+        });
+        await load();
+      });
+      actions.append(button);
+    }
+    row.append(actions);
+    node.append(row);
+  }
+}
+
+function renderApprovalList(selector: string, items: readonly ListRecord[]) {
+  const node = document.querySelector(selector);
+  if (!node) return;
+  node.innerHTML = "";
+  for (const item of items) {
+    const id = String(item.id ?? "");
+    const row = document.createElement("div");
+    row.className = "row";
+    row.innerHTML = `<div><strong>${escapeHtml(id)}</strong><small>${escapeHtml(String(item.status ?? ""))}</small></div>`;
+    if (String(item.status ?? "") === "pending") {
+      const actions = document.createElement("div");
+      actions.className = "actions";
+      for (const action of ["approve", "deny"]) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = action;
+        button.addEventListener("click", async () => {
+          await request(`/approvals/${encodeURIComponent(id)}/${action}`, {
+            method: "POST",
+            body: "{}",
+          });
+          await load();
+        });
+        actions.append(button);
+      }
+      row.append(actions);
+    }
     node.append(row);
   }
 }

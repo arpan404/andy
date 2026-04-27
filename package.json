@@ -24,7 +24,8 @@
     "lint": "biome lint .",
     "package:release": "bun scripts/package-release.ts",
     "test": "bun test packages",
-    "typecheck": "bun run --filter './packages/*' check && bun run --filter './plugins/*' check && bun run --filter './apps/*' check"
+    "typecheck": "bun run --filter './packages/*' check && bun run --filter './plugins/*' check && bun run --filter './apps/*' check",
+    "web": "bun run --filter @andy/web dev"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.13",

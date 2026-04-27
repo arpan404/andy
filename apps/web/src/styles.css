@@ -149,7 +149,9 @@ article strong {
 }
 
 .row {
-  display: grid;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 4px;
   padding: 12px;
   border: 1px solid var(--line);
@@ -157,7 +159,24 @@ article strong {
 }
 
 .row small {
+  display: block;
+  margin-top: 4px;
   color: var(--muted);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.actions button {
+  padding: 7px 9px;
+  font-size: 12px;
+  background: #24251f;
+  color: var(--text);
+  border-color: var(--line);
 }
 
 .command {
