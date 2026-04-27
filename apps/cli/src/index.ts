@@ -31,6 +31,10 @@ interface ParsedArgs {
   channel?: string;
   pollMs?: number;
   images: { path: string; mediaType?: string }[];
+  audioPath?: string;
+  transcriptPath?: string;
+  voice?: string;
+  speak: boolean;
 }
 
 const corePlugin = definePlugin({
@@ -73,6 +77,8 @@ if (parsed.command === "status") {
   await runSkillCommand(parsed);
 } else if (parsed.command === "ask") {
   await runAskCommand(parsed);
+} else if (parsed.command === "voice") {
+  await runVoiceCommand(parsed);
 } else if (parsed.command === "approval" || parsed.command === "approvals") {
   await runApprovalCommand(parsed);
 } else if (parsed.command === "help" || parsed.command === "--help") {
@@ -187,6 +193,33 @@ async function runAskCommand(args: ParsedArgs): Promise<void> {
     ...(args.modelProviderId ? { modelProviderId: args.modelProviderId } : {}),
     ...(args.images.length > 0 ? { images: args.images } : {}),
   });
+}
+
+async function runVoiceCommand(args: ParsedArgs): Promise<void> {
+  const [action, ...rest] = args.rest;
+  if (action === "stop") {
+    await printDaemonJson(args.url, "POST", "/voice/stop", {});
+    return;
+  }
+  if (!action || action === "turn") {
+    const text = rest.join(" ").trim();
+    if (!text && !args.audioPath && !args.transcriptPath) {
+      throw new Error(
+        "Usage: andy voice turn [--audio path|--transcript path|text] [--no-speak] [--voice name]",
+      );
+    }
+    await printDaemonJson(args.url, "POST", "/voice/turn", {
+      ...(text ? { text } : {}),
+      ...(args.audioPath ? { audioPath: args.audioPath } : {}),
+      ...(args.transcriptPath ? { transcriptPath: args.transcriptPath } : {}),
+      ...(args.modelProviderId ? { modelProviderId: args.modelProviderId } : {}),
+      ...(args.skills.length > 0 ? { skillIds: args.skills } : {}),
+      ...(args.voice ? { voice: args.voice } : {}),
+      speak: args.speak,
+    });
+    return;
+  }
+  throw new Error(`Unknown voice command '${action}'.`);
 }
 
 async function runPluginCommand(args: ParsedArgs): Promise<void> {
@@ -360,9 +393,13 @@ function parseArgs(input: string[]): ParsedArgs {
   let apiKeyEnv: string | undefined;
   let channel: string | undefined;
   let pollMs: number | undefined;
+  let audioPath: string | undefined;
+  let transcriptPath: string | undefined;
+  let voice: string | undefined;
   const images: { path: string; mediaType?: string }[] = [];
   let force = false;
   let disable = false;
+  let speak = true;
   const positional: string[] = [];
 
   for (let index = 0; index < input.length; index += 1) {
@@ -453,6 +490,37 @@ function parseArgs(input: string[]): ParsedArgs {
       index += 1;
       continue;
     }
+    if (arg === "--audio") {
+      const value = input[index + 1];
+      if (!value) {
+        throw new Error("--audio requires a file path.");
+      }
+      audioPath = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--transcript") {
+      const value = input[index + 1];
+      if (!value) {
+        throw new Error("--transcript requires a file path.");
+      }
+      transcriptPath = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--voice") {
+      const value = input[index + 1];
+      if (!value) {
+        throw new Error("--voice requires a value.");
+      }
+      voice = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--no-speak") {
+      speak = false;
+      continue;
+    }
     if (arg === "--manifest") {
       const value = input[index + 1];
       if (!value) {
@@ -519,6 +587,7 @@ function parseArgs(input: string[]): ParsedArgs {
     enable,
     force,
     disable,
+    speak,
     images,
     skills: skillsMarker
       ? skillsMarker
@@ -534,6 +603,9 @@ function parseArgs(input: string[]): ParsedArgs {
     ...(apiKeyEnv ? { apiKeyEnv } : {}),
     ...(channel ? { channel } : {}),
     ...(pollMs ? { pollMs } : {}),
+    ...(audioPath ? { audioPath } : {}),
+    ...(transcriptPath ? { transcriptPath } : {}),
+    ...(voice ? { voice } : {}),
     ...(workflowMarker ? { workflow: workflowMarker.slice("__workflow:".length) } : {}),
     ...(modelProviderMarker
       ? { modelProviderId: modelProviderMarker.slice("__modelProvider:".length) }
@@ -635,6 +707,8 @@ Usage:
   andy config disable-model-provider <id>
   andy config remote <telegram|whatsapp> [--enable|--disable] [--model-provider id] [--poll-ms ms]
   andy ask [--skills skill.a,skill.b] [--model-provider id] [--image path] <message>
+  andy voice turn [--skills skill.a,skill.b] [--model-provider id] [--audio path|--transcript path|text] [--voice name] [--no-speak]
+  andy voice stop
   andy plugin list
   andy plugin install-local <manifestPath> [--enable]
   andy plugin review-local <manifestPath>

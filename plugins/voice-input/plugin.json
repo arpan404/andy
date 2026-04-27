@@ -5,7 +5,12 @@
   "entry": "./dist/index.js",
   "binaryEntrypoint": "./dist/plugin",
   "executionMode": "subprocess",
-  "capabilities": ["voice.listen", "voice.transcribe", "microphone.read"],
+  "capabilities": [
+    "voice.listen",
+    "voice.transcribe",
+    "voice.record",
+    "microphone.read"
+  ],
   "risk": "high",
   "tools": [
     {
@@ -17,17 +22,57 @@
         "isolation": "sandboxed",
         "compatibleExecutionModes": ["subprocess"],
         "reason": "Voice input is explicit activation only and policy-gated."
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "activationMode": {
+            "type": "string",
+            "enum": ["manual", "push-to-talk"]
+          },
+          "durationMs": { "type": "number", "minimum": 0, "maximum": 120000 }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "voice.record",
+      "description": "Capture microphone audio for an explicit, bounded duration through the current platform adapter.",
+      "capabilities": ["voice.record", "microphone.read"],
+      "risk": "high",
+      "sandbox": {
+        "isolation": "sandboxed",
+        "compatibleExecutionModes": ["subprocess"],
+        "reason": "Microphone capture is explicit, bounded, policy-gated, and written to caller-provided storage."
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "outputPath": { "type": "string", "minLength": 1 },
+          "durationMs": { "type": "number", "minimum": 1, "maximum": 120000 }
+        },
+        "required": ["outputPath"],
+        "additionalProperties": false
       }
     },
     {
       "name": "voice.transcribe",
-      "description": "Normalize supplied transcript text or hand off approved audio files for STT provider integration.",
+      "description": "Normalize supplied transcript text or approved audio/transcript files for STT provider handoff.",
       "capabilities": ["voice.transcribe"],
       "risk": "medium",
       "sandbox": {
         "isolation": "sandboxed",
         "compatibleExecutionModes": ["subprocess"],
         "reason": "Transcription does not use ambient microphone access."
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": { "type": "string" },
+          "audioPath": { "type": "string" },
+          "transcriptPath": { "type": "string" }
+        },
+        "additionalProperties": false
       }
     }
   ]

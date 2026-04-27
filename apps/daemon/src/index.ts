@@ -589,8 +589,10 @@ function createDefaultConfig(): DaemonConfig {
       "messaging.read_contact",
       "messaging.map_identity",
       "voice.listen",
+      "voice.record",
       "voice.transcribe",
       "voice.speak",
+      "voice.stop",
       "microphone.read",
       "speaker.speak",
       "camera.read",
@@ -625,6 +627,7 @@ function createDefaultConfig(): DaemonConfig {
       "filesystem.delete",
       "shell.execute",
       "messaging.manage_webhook",
+      "voice.record",
       "microphone.read",
       "screen.capture",
       "computer.mouse",
@@ -1270,6 +1273,33 @@ function handleHttpRequest(
       const body = yield* readJsonBody(request);
       const result = yield* runAgentRequest(booted, body);
       writeJson(response, 200, result);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/voice/turn") {
+      const body = yield* readJsonBody(request);
+      const result = yield* Effect.either(runVoiceTurn(booted, body));
+      if (result._tag === "Left") {
+        if (String(result.left).includes("ToolApprovalRequiredError")) {
+          yield* booted.services.saveState();
+          writeJson(response, 202, {
+            status: "approval_required",
+            approvals: booted.services.approvals.list(),
+          });
+          return;
+        }
+        return yield* Effect.fail(result.left);
+      }
+      writeJson(response, 200, result.right);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/voice/stop") {
+      const result = yield* booted.services.runtime.executeTool(
+        "andy.voice.output.voice.stop",
+        {},
+      );
+      writeJson(response, 200, { output: result.output });
       return;
     }
 
@@ -2005,6 +2035,77 @@ function runAgentRequest(
   })();
 }
 
+function runVoiceTurn(
+  booted: BootedDaemon,
+  body: JsonValue,
+): Effect.Effect<
+  {
+    transcript: string;
+    response: string;
+    sessionId: string;
+    spoken: boolean;
+    speechOutput?: JsonValue;
+  },
+  unknown
+> {
+  return Effect.fn("daemon.runVoiceTurn")(function* () {
+    const payload = isJsonObject(body) ? body : {};
+    const text = optionalJsonString(payload, "text");
+    const audioPath = optionalJsonString(payload, "audioPath");
+    const transcriptPath = optionalJsonString(payload, "transcriptPath");
+    const message = optionalJsonString(payload, "message");
+    const speak = readJsonBoolean(payload, "speak") ?? true;
+    const voice = optionalJsonString(payload, "voice");
+    const modelProviderId = optionalJsonString(payload, "modelProviderId");
+    const systemPrompt = optionalJsonString(payload, "systemPrompt");
+    const skillIdsValue = readJsonProperty(payload, "skillIds");
+    const skillIds = Array.isArray(skillIdsValue)
+      ? skillIdsValue.filter((item): item is string => typeof item === "string")
+      : [];
+    const transcribeInput: JsonObject = {
+      ...(text ? { text } : {}),
+      ...(audioPath ? { audioPath } : {}),
+      ...(transcriptPath ? { transcriptPath } : {}),
+    };
+    const transcription = yield* booted.services.runtime.executeTool(
+      "andy.voice.input.voice.transcribe",
+      transcribeInput,
+      { channelId: "local-voice" },
+    );
+    const transcript = readJsonOutputString(transcription.output, "text");
+    if (!transcript) {
+      throw new Error(
+        "Voice turn has no transcript. Provide text/transcriptPath, or configure an STT provider plugin for audio files.",
+      );
+    }
+    const agentResult = yield* runAgentRequest(booted, {
+      message: message ? `${message}\n\nTranscript: ${transcript}` : transcript,
+      ...(modelProviderId ? { modelProviderId } : {}),
+      ...(systemPrompt ? { systemPrompt } : {}),
+      ...(skillIds.length > 0 ? { skillIds } : {}),
+    });
+    let speechOutput: JsonValue | undefined;
+    if (speak) {
+      const speech = yield* booted.services.runtime.executeTool(
+        "andy.voice.output.voice.speak",
+        {
+          text: agentResult.response,
+          ...(voice ? { voice } : {}),
+        },
+        { channelId: "local-voice" },
+      );
+      speechOutput = speech.output;
+    }
+    return {
+      transcript,
+      response: agentResult.response,
+      sessionId: agentResult.sessionId,
+      spoken: speak,
+      ...(speechOutput ? { speechOutput } : {}),
+    };
+  })();
+}
+
 function buildSkillInstructions(
   booted: BootedDaemon,
   skillIds: readonly string[],
@@ -2064,6 +2165,23 @@ function normalizeAgentImages(
 function optionalJsonString(object: JsonObject, key: string): string | undefined {
   const value = object[key];
   return typeof value === "string" ? value : undefined;
+}
+
+function readJsonBoolean(object: JsonObject, key: string): boolean | undefined {
+  const value = object[key];
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function readJsonProperty(object: JsonObject, key: string): JsonValue | undefined {
+  return object[key];
+}
+
+function readJsonOutputString(value: JsonValue, key: string): string {
+  if (!isJsonObject(value)) {
+    return "";
+  }
+  const entry = value[key];
+  return typeof entry === "string" ? entry : "";
 }
 
 function detectImageMediaType(bytes: Buffer): string {

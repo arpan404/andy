@@ -75,6 +75,7 @@ Package layout:
 ```text
 bin/andy
 bin/andy-daemon
+bin/andy-desktop
 plugins/<plugin>/plugin.json
 plugins/<plugin>/dist/plugin
 plugins/<plugin>/skills/**/skill.json
@@ -86,6 +87,19 @@ release.json
 ```
 
 `release.json` records the package platform, architecture, binaries, plugin manifests, plugin binary paths, bundled skills, and global skills. Release packaging fails if a required binary, plugin manifest, plugin worker binary, global skill manifest, or web asset is missing.
+
+## Desktop Controller
+
+The release bundle includes `bin/andy-desktop`, a local launcher/controller for the packaged daemon and web console:
+
+```bash
+./bin/andy-desktop start --home ~/.andy-runtime
+./bin/andy-desktop status --home ~/.andy-runtime
+./bin/andy-desktop open --home ~/.andy-runtime
+./bin/andy-desktop stop --home ~/.andy-runtime
+```
+
+`andy-desktop` starts the packaged daemon, serves the bundled web console, opens the console in the default browser, and stores local process state under `$ANDY_HOME/.andy/desktop.json`.
 
 ## CLI Operations
 
@@ -107,6 +121,8 @@ The compiled `dist/andy` binary can manage a running daemon:
 ./dist/andy skill install-local skills/remember/skill.json --enable
 ./dist/andy skill run andy.skills.remember --workflow save --input '{"key":"editor","value":"vim"}'
 ./dist/andy ask --image /path/to/screenshot.png "What is visible here?"
+./dist/andy voice turn "Summarize current Andy status"
+./dist/andy voice stop
 ./dist/andy approval list
 ```
 
@@ -124,10 +140,12 @@ bun run check
 bun run build
 bun run build:binary
 bun run build:daemon-binary
+bun run build:desktop-binary
 bun run build:plugin-binaries
 bun run package:release
 ./dist/andy "binary smoke"
 ./dist/andy-daemon --status
+./dist/andy-desktop status --home "$(mktemp -d)"
 ```
 
 To validate plugin execution without invoking Bun for plugin workers, temporarily run the daemon with `bun` unavailable on `PATH` after `bun run build:plugin-binaries`; enabled first-party plugins should still start through their `binaryEntrypoint`.

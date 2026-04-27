@@ -2,10 +2,14 @@ const daemonUrl = document.querySelector<HTMLInputElement>("#daemonUrl");
 const refresh = document.querySelector<HTMLButtonElement>("#refresh");
 const runSkill = document.querySelector<HTMLButtonElement>("#runSkill");
 const askAgent = document.querySelector<HTMLButtonElement>("#askAgent");
+const voiceTurn = document.querySelector<HTMLButtonElement>("#voiceTurn");
+const voiceStop = document.querySelector<HTMLButtonElement>("#voiceStop");
 
 refresh?.addEventListener("click", () => void load());
 runSkill?.addEventListener("click", () => void runSelectedSkill());
 askAgent?.addEventListener("click", () => void runAgentRequest());
+voiceTurn?.addEventListener("click", () => void runVoiceTurn());
+voiceStop?.addEventListener("click", () => void stopVoice());
 void load();
 
 async function load() {
@@ -47,6 +51,29 @@ async function runAgentRequest() {
       skillIds,
       images: value("#askImage") ? [{ path: value("#askImage") }] : [],
     }),
+  });
+  setText("#output", JSON.stringify(result, null, 2));
+}
+
+async function runVoiceTurn() {
+  const result = await request("/voice/turn", {
+    method: "POST",
+    body: JSON.stringify({
+      text: value("#voiceText"),
+      ...(value("#voiceTranscript")
+        ? { transcriptPath: value("#voiceTranscript") }
+        : {}),
+      ...(value("#voiceName") ? { voice: value("#voiceName") } : {}),
+      speak: checked("#voiceSpeak"),
+    }),
+  });
+  setText("#output", JSON.stringify(result, null, 2));
+}
+
+async function stopVoice() {
+  const result = await request("/voice/stop", {
+    method: "POST",
+    body: "{}",
   });
   setText("#output", JSON.stringify(result, null, 2));
 }
@@ -159,6 +186,10 @@ function value(selector: string): string {
     document.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector)?.value ??
     ""
   );
+}
+
+function checked(selector: string): boolean {
+  return document.querySelector<HTMLInputElement>(selector)?.checked ?? false;
 }
 
 function escapeHtml(value: string): string {

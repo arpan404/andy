@@ -41,8 +41,10 @@ export const Capabilities = {
   },
   voice: {
     listen: "voice.listen",
+    record: "voice.record",
     transcribe: "voice.transcribe",
     speak: "voice.speak",
+    stop: "voice.stop",
   },
   vision: {
     capture: "screen.capture",
@@ -114,6 +116,13 @@ export const Tools = {
   messaging: {
     receive: "messaging.receive",
     send: "messaging.send",
+  },
+  voice: {
+    listen: "voice.listen",
+    record: "voice.record",
+    transcribe: "voice.transcribe",
+    speak: "voice.speak",
+    stop: "voice.stop",
   },
   secrets: {
     get: "secrets.get",

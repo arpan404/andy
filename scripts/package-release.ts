@@ -20,6 +20,7 @@ interface ReleaseManifest {
   binaries: {
     cli: string;
     daemon: string;
+    desktop: string;
   };
   web: {
     path: string;
@@ -51,6 +52,10 @@ await copyRequired(
   join(root, "dist", "andy-daemon"),
   join(releaseRoot, "bin", "andy-daemon"),
 );
+await copyRequired(
+  join(root, "dist", "andy-desktop"),
+  join(releaseRoot, "bin", "andy-desktop"),
+);
 await copyRequired(join(root, "apps", "web", "dist"), join(releaseRoot, "web"));
 
 const plugins = await packagePlugins();
@@ -64,6 +69,7 @@ const manifest: ReleaseManifest = {
   binaries: {
     cli: "bin/andy",
     daemon: "bin/andy-daemon",
+    desktop: "bin/andy-desktop",
   },
   web: {
     path: "web",

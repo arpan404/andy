@@ -29,6 +29,11 @@ This list tracks the first production path now that the core kernel is ready eno
 4. Active cancellation propagation for in-flight tool execution. Done.
 5. Durable policy config and expiring grants. Done.
 
+## Deferred Follow-Up
+
+1. Real audio-file STT provider plugin. The voice loop supports provided text and transcript files today; recorded audio handoff is intentionally noted for later provider integration and hardware testing.
+2. Microphone capture validation on macOS, Linux, and Windows hardware.
+
 ## Rules
 
 - Product capability belongs in plugins.
@@ -127,12 +132,14 @@ This list tracks the first production path now that the core kernel is ready eno
 - Added macOS local notification dispatch as a best-effort native delivery path in the notifications plugin.
 - Tightened computer-control key handling with named key-code support while preserving policy/env gating.
 - Added `andy ask --image <path>` and daemon `/agent/run` image payloads so multimodal AI SDK providers receive images directly.
+- Expanded voice plugins with explicit activation metadata, bounded cross-platform recording adapters, transcript/audio handoff, cross-platform TTS adapters, speech stop support, daemon `/voice/turn`, CLI `andy voice ...`, and web console voice controls.
+- Added `@andy/desktop`, a release-bundled desktop controller that starts/stops the daemon and web console, opens the browser console, and records local process state without bypassing daemon/plugin policy boundaries.
 
 ### Release Packaging
 
 - Added `bun run package:release` to assemble compiled release artifacts into `dist/release/andy-<version>-<platform>-<arch>/`.
 - Added `bun run build:release` to build workspaces, plugin binaries, CLI binary, daemon binary, and the release package in one command.
-- The release package includes `bin/andy`, `bin/andy-daemon`, built web assets, global first-party skills, first-party plugin manifests, plugin worker binaries, plugin-bundled skills, and `release.json`.
+- The release package includes `bin/andy`, `bin/andy-daemon`, `bin/andy-desktop`, built web assets, global first-party skills, first-party plugin manifests, plugin worker binaries, plugin-bundled skills, and `release.json`.
 - Packaging fails when a required binary, manifest, skill, or web asset is missing, so release validation catches incomplete runtime-free bundles.
 
 ### Telegram Remote Control

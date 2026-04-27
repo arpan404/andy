@@ -61,6 +61,18 @@
         "typescript": "^5.9.3",
       },
     },
+    "apps/desktop": {
+      "name": "@andy/desktop",
+      "version": "0.1.0",
+      "dependencies": {
+        "effect": "^3.21.2",
+      },
+      "devDependencies": {
+        "@types/node": "^25.0.0",
+        "tsx": "^4.21.0",
+        "typescript": "^5.9.3",
+      },
+    },
     "apps/web": {
       "name": "@andy/web",
       "version": "0.1.0",
@@ -435,6 +447,8 @@
     "@andy/core": ["@andy/core@workspace:packages/core"],
 
     "@andy/daemon": ["@andy/daemon@workspace:apps/daemon"],
+
+    "@andy/desktop": ["@andy/desktop@workspace:apps/desktop"],
 
     "@andy/memory": ["@andy/memory@workspace:packages/memory"],
 

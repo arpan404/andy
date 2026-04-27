@@ -96,6 +96,28 @@ Use the selected skills and summarize daemon status.</textarea
           <button id="runSkill" type="button">Run</button>
           <pre id="output"></pre>
         </div>
+
+        <div class="panel command">
+          <div class="panel-head">
+            <h2>Voice Turn</h2>
+          </div>
+          <label
+            >Transcript
+            <textarea id="voiceText">Summarize current Andy status.</textarea>
+          </label>
+          <label
+            >Transcript File
+            <input id="voiceTranscript" placeholder="/absolute/path/to/transcript.txt"
+          /></label>
+          <label>Voice <input id="voiceName" placeholder="system default" /></label>
+          <label class="inline-check"
+            ><input id="voiceSpeak" type="checkbox" checked /> Speak response</label
+          >
+          <div class="button-row">
+            <button id="voiceTurn" type="button">Run Voice Turn</button>
+            <button id="voiceStop" type="button">Stop Speech</button>
+          </div>
+        </div>
       </section>
     </main>
     <script type="module" src="./main.js"></script>

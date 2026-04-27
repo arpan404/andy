@@ -14,10 +14,12 @@ Andy Core should stay small and trusted. It should provide the kernel, policy bo
 - The project coding plugin provides scoped read/write/search/diff/run-check tools plus bundled Effect TS and React coding skills.
 - The local web console provides a first UI surface for daemon status, plugin/skill inventory, approvals, and skill runs.
 - Release packaging now assembles CLI, daemon, web assets, global skills, plugin manifests, plugin binaries, and plugin-bundled skills into `dist/release/andy-<version>-<platform>-<arch>/`.
+- The release bundle includes `andy-desktop`, a local controller app for starting/stopping the daemon and web console from one binary while product capabilities remain behind plugins and daemon APIs.
 - Daemon remote control supports Telegram polling/webhook mode and WhatsApp webhook mode: inbound messages are normalized, published through the communication bridge, handled by an agent session using a configured AI SDK model provider, and replied to through the channel plugin.
 - Daemon HTTP ingress exposes health/status, approval list/decision endpoints, and Telegram/WhatsApp webhook endpoints with optional shared-secret verification.
 - Agent session kernel with AI SDK result types.
 - Agent requests can include image parts that are passed to Vercel AI SDK model messages for multimodal providers.
+- Local voice turns route through voice plugins: transcript/audio handoff, agent run, and optional platform TTS response.
 - Bounded same-step tool-call execution with ordered tool-result messages.
 - Fully qualified internal tool names with ambiguity-safe local aliases.
 - AI SDK tool-name adapter that exposes model-safe tool names while mapping back to Andy qualified runtime tools.
