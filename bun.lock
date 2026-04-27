@@ -245,6 +245,19 @@
         "typescript": "^5.9.3",
       },
     },
+    "plugins/browser": {
+      "name": "@andy/plugin-browser",
+      "version": "0.1.0",
+      "dependencies": {
+        "@andy/plugin-worker": "workspace:*",
+        "@andy/types": "workspace:*",
+        "effect": "^3.21.2",
+      },
+      "devDependencies": {
+        "@types/node": "^25.0.0",
+        "typescript": "^5.9.3",
+      },
+    },
     "plugins/computer-control": {
       "name": "@andy/plugin-computer-control",
       "version": "0.1.0",
@@ -455,6 +468,8 @@
     "@andy/model-ai-sdk": ["@andy/model-ai-sdk@workspace:packages/model-ai-sdk"],
 
     "@andy/plugin-background-worker": ["@andy/plugin-background-worker@workspace:plugins/background-worker"],
+
+    "@andy/plugin-browser": ["@andy/plugin-browser@workspace:plugins/browser"],
 
     "@andy/plugin-computer-control": ["@andy/plugin-computer-control@workspace:plugins/computer-control"],
 

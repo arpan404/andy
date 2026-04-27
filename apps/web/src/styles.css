@@ -107,7 +107,7 @@ button {
 }
 
 .status-grid {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   margin-bottom: 12px;
 }
 
@@ -136,10 +136,27 @@ article strong {
   min-height: 320px;
 }
 
+.wide {
+  grid-column: 1 / -1;
+  min-height: 260px;
+}
+
 .panel-head {
   padding: 14px 16px;
   border-bottom: 1px solid var(--line);
   background: var(--panel-2);
+}
+
+.split {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.split span {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .list {
@@ -161,6 +178,89 @@ article strong {
 .row small {
   display: block;
   margin-top: 4px;
+  color: var(--muted);
+}
+
+.timeline {
+  display: grid;
+  gap: 10px;
+  max-height: 460px;
+  overflow: auto;
+  padding: 12px;
+}
+
+.event {
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #10110f;
+}
+
+.event-marker {
+  display: grid;
+  place-items: center;
+  border-right: 1px solid var(--line);
+  color: #111;
+  font-weight: 700;
+}
+
+.event-calm .event-marker {
+  background: #9fc6ff;
+}
+
+.event-warn .event-marker {
+  background: #ffcf5c;
+}
+
+.event-hot .event-marker {
+  background: #ff7a70;
+}
+
+.event-body {
+  min-width: 0;
+  padding: 10px 10px 10px 0;
+}
+
+.event-title {
+  font-weight: 700;
+}
+
+.event-meta {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.trace-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+  padding: 12px;
+}
+
+.trace,
+.empty {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #10110f;
+  padding: 12px;
+}
+
+.trace code {
+  display: block;
+  margin: 8px 0;
+  color: var(--accent);
+  word-break: break-all;
+}
+
+.trace small {
+  display: block;
+  color: var(--muted);
+}
+
+.empty {
   color: var(--muted);
 }
 
@@ -224,6 +324,12 @@ pre {
   border: 1px solid var(--line);
   border-radius: 6px;
   background: #0c0d0b;
+}
+
+.event pre {
+  min-height: 0;
+  max-height: 160px;
+  margin: 10px 0 0;
 }
 
 @media (max-width: 760px) {

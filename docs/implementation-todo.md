@@ -20,6 +20,9 @@ This list tracks the first production path now that the core kernel is ready eno
 14. Implement remaining first-class system plugins: background-worker, notifications, swarm-orchestrator, persistent memory, and semantic memory. Done.
 15. Implement a real skills subsystem with typed manifests, durable registry, daemon APIs, CLI commands, and first-party skills. Done.
 16. Implement bundled skill discovery, skill-aware agent prompt context, project coding plugin, richer declarative skill workflow controls, install review APIs, more AI SDK providers, native-depth improvements, sensitive filesystem reads, and local web console. Done.
+17. Add a first-party browser automation plugin and harden daemon secrets with OS-backed storage. Done on `feature/browser-plugin-secrets-broker`.
+18. Add daemon/CLI/web observability for events, logs, and traces. Done.
+19. Add plugin signature trust records and release tarball/checksum artifacts. Done.
 
 ## Core Completion Todo
 
@@ -57,6 +60,7 @@ This list tracks the first production path now that the core kernel is ready eno
 - Plugin lifecycle reports host health and can restart crashed plugin hosts; failed restarts disable runtime proxy tools.
 - Active runtime cancellation races in-flight tool effects and interrupts hosted worker/subprocess calls.
 - Policy config supports per-plugin/channel/risk rules and expiring grants.
+- Daemon secrets now use an OS-backed broker where available: macOS Keychain, Linux Secret Service, or Windows Credential Manager. Unsupported hosts fall back to encoded `.andy/secrets.json` records while preserving declared-scope checks and audit.
 - Skills are now declarative workflow packages with `@andy/skill-sdk`, `@andy/skill-manager`, `.andy/skills.json`, daemon APIs, and CLI commands.
 - Skill execution composes fully qualified plugin tools through the normal runtime path, so policy, approval, audit, schemas, and plugin lifecycle still apply.
 - Plugin installs now discover bundled `skills/**/skill.json` manifests and install them as plugin-owned skill records.
@@ -69,6 +73,8 @@ This list tracks the first production path now that the core kernel is ready eno
 - Plugin lifecycle start replaces an already-running handle before starting the new one.
 - Runtime tool execution now checks cancellation tokens before executing tools.
 - Agent sessions, replayable audit/event history, and trace contexts now hydrate from and save to the core state snapshot.
+- Daemon HTTP exposes `GET /events`, `GET /logs`, and `GET /traces`; CLI exposes `andy events`, `andy logs`, and `andy traces`; the web console shows a live timeline and trace list.
+- Plugin review/install now records trust state from optional Ed25519 `plugin.signature.json` files and configured trusted publishers.
 - Added focused tests for durable plugin registry, lifecycle stop behavior, durable events, session persistence, and cancelled tool execution.
 
 ### `memory-markdown`
@@ -101,6 +107,7 @@ This list tracks the first production path now that the core kernel is ready eno
 - Added `@andy/plugin-worker` for consistent subprocess JSON-line worker protocol helpers.
 - Added `@andy/plugin-filesystem` with scoped `filesystem.read`, `filesystem.list`, `filesystem.write`, and `filesystem.delete`.
 - Added `@andy/plugin-shell` with non-interpolated command execution, scoped `cwd`, bounded output, and approval-oriented `shell.execute` metadata.
+- Added `@andy/plugin-browser` with local CDP-backed navigation, inspection, click, type, screenshot, and form-submit tools. It only connects to localhost/127.0.0.1 CDP URLs and keeps high-risk browser actions behind policy.
 - Added `@andy/plugin-telegram` with official Bot API polling, send message, webhook configuration, and update normalization tools.
 - Added `@andy/plugin-whatsapp` with official Meta Graph API send, webhook verification, and webhook normalization tools.
 - Added `@andy/plugin-voice-input` and `@andy/plugin-voice-output` capability surfaces for explicit activation, transcript handoff, and local speech output.
@@ -140,6 +147,7 @@ This list tracks the first production path now that the core kernel is ready eno
 - Added `bun run package:release` to assemble compiled release artifacts into `dist/release/andy-<version>-<platform>-<arch>/`.
 - Added `bun run build:release` to build workspaces, plugin binaries, CLI binary, daemon binary, and the release package in one command.
 - The release package includes `bin/andy`, `bin/andy-daemon`, `bin/andy-desktop`, built web assets, global first-party skills, first-party plugin manifests, plugin worker binaries, plugin-bundled skills, and `release.json`.
+- Release packaging also writes `dist/installers/*.tar.gz` plus a `.sha256` checksum file.
 - Packaging fails when a required binary, manifest, skill, or web asset is missing, so release validation catches incomplete runtime-free bundles.
 
 ### Telegram Remote Control

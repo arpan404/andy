@@ -5,6 +5,7 @@ import {
   CommunicationSendError,
   createAndyDaemon,
   JsonFileCoreStateStore,
+  OsSecretBroker,
 } from "@andy/core";
 import type { AndyDaemonServices } from "@andy/core";
 import {
@@ -15,7 +16,11 @@ import {
 import {
   createInstallPlan,
   JsonFilePluginRegistry,
+  parsePluginSignatureFile,
   type InstalledPluginRecord,
+  type PluginTrustRecord,
+  type TrustedPluginPublisher,
+  verifyPluginManifestSignature,
 } from "@andy/plugin-manager";
 import { parsePluginManifest, type PluginManifest } from "@andy/plugin-sdk";
 import {
@@ -49,6 +54,8 @@ interface DaemonConfig {
   skillRegistryPath: string;
   pluginInstallRoot: string;
   policyPath: string;
+  secretFallbackPath: string;
+  trustedPublishers: TrustedPluginPublisher[];
   backgroundPollMs: number;
   allowedCapabilities: string[];
   approvalRequiredCapabilities: string[];
@@ -216,10 +223,16 @@ function bootDaemon(path: string): Effect.Effect<BootedDaemon, unknown> {
     const policyStore = new JsonFilePolicyStore(resolveDataPath(config.policyPath));
     const policyConfig = yield* policyStore.load(createDefaultPolicyConfig(config));
     const audit = new ConsoleAuditSink();
+    const secretBroker = new OsSecretBroker({
+      audit,
+      fallbackPath: resolveDataPath(config.secretFallbackPath),
+    });
+    yield* secretBroker.load();
     const services = yield* createAndyDaemon({
       audit,
       policy: createPolicyEngineFromConfig(policyConfig),
       stateStore: new JsonFileCoreStateStore(resolveDataPath(config.statePath)),
+      secretBroker,
     });
 
     yield* seedPluginRegistryFromConfig(pluginRegistry, skillRegistry, config);
@@ -321,6 +334,49 @@ function loadSkillManifest(path: string): Effect.Effect<SkillManifest, unknown> 
   })();
 }
 
+function toInstallManifest(
+  manifest: PluginManifest,
+  sourceRoot: string,
+): PluginManifest {
+  return {
+    ...manifest,
+    entry: relativizeEntry(manifest.entry, sourceRoot),
+    ...(manifest.binaryEntrypoint
+      ? {
+          binaryEntrypoint: relativizeEntry(manifest.binaryEntrypoint, sourceRoot),
+        }
+      : {}),
+  };
+}
+
+function loadPluginTrust(
+  manifest: PluginManifest,
+  sourceRoot: string,
+  config: DaemonConfig,
+): Effect.Effect<PluginTrustRecord, unknown> {
+  return Effect.fn("daemon.loadPluginTrust")(function* () {
+    const signaturePath = resolve(sourceRoot, "plugin.signature.json");
+    const signature = yield* Effect.either(
+      Effect.tryPromise({
+        try: async () =>
+          parsePluginSignatureFile(JSON.parse(await readFile(signaturePath, "utf8"))),
+        catch: (cause) => cause,
+      }),
+    );
+    if (signature._tag === "Left") {
+      if (isFileNotFound(signature.left)) {
+        return { signatureStatus: "unsigned" as const };
+      }
+      return yield* Effect.fail(signature.left);
+    }
+    return verifyPluginManifestSignature({
+      manifest,
+      signature: signature.right,
+      trustedPublishers: config.trustedPublishers,
+    });
+  })();
+}
+
 function seedPluginRegistryFromConfig(
   registry: JsonFilePluginRegistry,
   skillRegistry: JsonFileSkillRegistry,
@@ -330,6 +386,8 @@ function seedPluginRegistryFromConfig(
     for (const plugin of config.plugins) {
       const manifest = yield* loadManifest(plugin.manifestPath);
       const sourceRoot = dirname(resolveAssetPath(plugin.manifestPath));
+      const installManifest = toInstallManifest(manifest, sourceRoot);
+      const trust = yield* loadPluginTrust(installManifest, sourceRoot, config);
       const source = {
         type: "local" as const,
         path: sourceRoot,
@@ -337,35 +395,13 @@ function seedPluginRegistryFromConfig(
       const existing = yield* Effect.either(registry.get(manifest.id));
       if (existing._tag === "Left") {
         yield* registry.install(
-          createInstallPlan(source, {
-            ...manifest,
-            entry: relativizeEntry(manifest.entry, sourceRoot),
-            ...(manifest.binaryEntrypoint
-              ? {
-                  binaryEntrypoint: relativizeEntry(
-                    manifest.binaryEntrypoint,
-                    sourceRoot,
-                  ),
-                }
-              : {}),
-          }),
+          createInstallPlan(source, installManifest, undefined, { trust }),
         );
       } else {
-        const nextManifest = {
-          ...manifest,
-          entry: relativizeEntry(manifest.entry, sourceRoot),
-          ...(manifest.binaryEntrypoint
-            ? {
-                binaryEntrypoint: relativizeEntry(
-                  manifest.binaryEntrypoint,
-                  sourceRoot,
-                ),
-              }
-            : {}),
-        };
+        const nextManifest = installManifest;
         if (JSON.stringify(existing.right.manifest) !== JSON.stringify(nextManifest)) {
           yield* registry.upgrade(
-            createInstallPlan(source, nextManifest, existing.right),
+            createInstallPlan(source, nextManifest, existing.right, { trust }),
             "approved",
           );
         }
@@ -569,6 +605,8 @@ function createDefaultConfig(): DaemonConfig {
     skillRegistryPath: ".andy/skills.json",
     pluginInstallRoot: ".andy/github-plugins",
     policyPath: ".andy/policy.json",
+    secretFallbackPath: ".andy/secrets.json",
+    trustedPublishers: [],
     backgroundPollMs: 5_000,
     allowedCapabilities: [
       "memory.fetch",
@@ -581,7 +619,6 @@ function createDefaultConfig(): DaemonConfig {
       "filesystem.read_sensitive",
       "filesystem.write",
       "filesystem.delete",
-      "filesystem.read_sensitive",
       "shell.execute",
       "messaging.receive",
       "messaging.send",
@@ -599,6 +636,12 @@ function createDefaultConfig(): DaemonConfig {
       "screen.capture",
       "screen.ocr",
       "screen.describe",
+      "browser.navigate",
+      "browser.inspect",
+      "browser.click",
+      "browser.type",
+      "browser.screenshot",
+      "browser.submit_form",
       "computer.mouse",
       "computer.keyboard",
       "computer.window",
@@ -630,6 +673,11 @@ function createDefaultConfig(): DaemonConfig {
       "voice.record",
       "microphone.read",
       "screen.capture",
+      "browser.navigate",
+      "browser.click",
+      "browser.type",
+      "browser.screenshot",
+      "browser.submit_form",
       "computer.mouse",
       "computer.keyboard",
       "computer.window",
@@ -658,6 +706,7 @@ function createDefaultConfig(): DaemonConfig {
       { manifestPath: "plugins/voice-input/plugin.json", enabled: false },
       { manifestPath: "plugins/voice-output/plugin.json", enabled: false },
       { manifestPath: "plugins/vision/plugin.json", enabled: false },
+      { manifestPath: "plugins/browser/plugin.json", enabled: false },
       { manifestPath: "plugins/computer-control/plugin.json", enabled: false },
       { manifestPath: "plugins/background-worker/plugin.json", enabled: false },
       { manifestPath: "plugins/notifications/plugin.json", enabled: false },
@@ -738,6 +787,11 @@ function parseConfig(value: unknown): DaemonConfig {
         : ".andy/github-plugins",
     policyPath:
       typeof record.policyPath === "string" ? record.policyPath : ".andy/policy.json",
+    secretFallbackPath:
+      typeof record.secretFallbackPath === "string"
+        ? record.secretFallbackPath
+        : ".andy/secrets.json",
+    trustedPublishers: parseTrustedPublishers(record.trustedPublishers),
     backgroundPollMs:
       typeof record.backgroundPollMs === "number" && record.backgroundPollMs > 0
         ? record.backgroundPollMs
@@ -813,6 +867,22 @@ function mergeModelProviderDefaults(
     byId.set(provider.id, provider);
   }
   return [...byId.values()];
+}
+
+function parseTrustedPublishers(value: unknown): TrustedPluginPublisher[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((item): TrustedPluginPublisher[] => {
+    if (typeof item !== "object" || item === null) {
+      return [];
+    }
+    const record = item as Partial<TrustedPluginPublisher>;
+    if (typeof record.id !== "string" || typeof record.publicKey !== "string") {
+      return [];
+    }
+    return [{ id: record.id, publicKey: record.publicKey }];
+  });
 }
 
 function createDefaultPolicyConfig(config: DaemonConfig): PolicyConfig {
@@ -923,11 +993,13 @@ function createStatus(booted: BootedDaemon) {
     skillRegistryPath: booted.config.skillRegistryPath,
     pluginInstallRoot: booted.config.pluginInstallRoot,
     policyPath: booted.config.policyPath,
+    secretFallbackPath: booted.config.secretFallbackPath,
     pluginHosts: booted.services.lifecycle.health(),
     installedPlugins: booted.installedPlugins.map((plugin) => ({
       pluginId: plugin.manifest.id,
       status: plugin.status,
       source: plugin.source,
+      trust: plugin.trust ?? { signatureStatus: "unsigned" },
       installedAt: plugin.installedAt,
       updatedAt: plugin.updatedAt,
     })),
@@ -962,6 +1034,73 @@ function createStatus(booted: BootedDaemon) {
     eventCount: booted.services.eventBus.replay().length,
     traceCount: booted.services.traces.list().length,
   };
+}
+
+interface ObservabilityQuery {
+  fromSequence?: string;
+  limit?: string;
+  type?: string;
+  traceId?: string;
+  sessionId?: string;
+  parentTraceId?: string;
+  name?: string;
+}
+
+interface EventFilterRecord {
+  type?: unknown;
+  traceId?: unknown;
+  sessionId?: unknown;
+}
+
+function queryEvents(booted: BootedDaemon, query: ObservabilityQuery) {
+  const fromSequence = parsePositiveNumber(query.fromSequence) ?? 1;
+  const limit = parsePositiveNumber(query.limit) ?? 100;
+  const type = query.type;
+  const traceId = query.traceId;
+  const sessionId = query.sessionId;
+  return booted.services.eventBus
+    .replay(fromSequence)
+    .filter((envelope) => {
+      const event = envelope.event as EventFilterRecord;
+      return (
+        (!type || event.type === type) &&
+        (!traceId || event.traceId === traceId) &&
+        (!sessionId || event.sessionId === sessionId)
+      );
+    })
+    .slice(-limit)
+    .map((envelope) => ({
+      ...envelope,
+      publishedAt: envelope.publishedAt.toISOString(),
+    }));
+}
+
+function queryTraces(booted: BootedDaemon, query: ObservabilityQuery) {
+  const limit = parsePositiveNumber(query.limit) ?? 100;
+  const parentTraceId = query.parentTraceId;
+  const traceId = query.traceId;
+  const name = query.name;
+  return booted.services.traces
+    .list()
+    .filter(
+      (trace) =>
+        (!traceId || trace.traceId === traceId) &&
+        (!parentTraceId || trace.parentTraceId === parentTraceId) &&
+        (!name || trace.name.includes(name)),
+    )
+    .slice(-limit)
+    .map((trace) => ({
+      ...trace,
+      startedAt: trace.startedAt.toISOString(),
+    }));
+}
+
+function parsePositiveNumber(value: string | undefined): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 function sanitizeConfig(config: DaemonConfig) {
@@ -1219,6 +1358,24 @@ function handleHttpRequest(
     }
     if (request.method === "GET" && url.pathname === "/config") {
       writeJson(response, 200, { config: sanitizeConfig(booted.config) });
+      return;
+    }
+    if (request.method === "GET" && url.pathname === "/events") {
+      writeJson(response, 200, {
+        events: queryEvents(booted, Object.fromEntries(url.searchParams)),
+      });
+      return;
+    }
+    if (request.method === "GET" && url.pathname === "/logs") {
+      writeJson(response, 200, {
+        logs: queryEvents(booted, Object.fromEntries(url.searchParams)),
+      });
+      return;
+    }
+    if (request.method === "GET" && url.pathname === "/traces") {
+      writeJson(response, 200, {
+        traces: queryTraces(booted, Object.fromEntries(url.searchParams)),
+      });
       return;
     }
     if (request.method === "POST" && url.pathname === "/config/model-provider") {
@@ -1496,19 +1653,14 @@ function installLocalPlugin(
     const enableAfterInstall = payload.enabled === true;
     const manifest = yield* loadManifest(manifestPath);
     const sourceRoot = dirname(resolveAssetPath(manifestPath));
+    const installManifest = toInstallManifest(manifest, sourceRoot);
+    const trust = yield* loadPluginTrust(installManifest, sourceRoot, booted.config);
     const existing = yield* Effect.either(booted.pluginRegistry.get(manifest.id));
     const plan = createInstallPlan(
       { type: "local", path: sourceRoot },
-      {
-        ...manifest,
-        entry: relativizeEntry(manifest.entry, sourceRoot),
-        ...(manifest.binaryEntrypoint
-          ? {
-              binaryEntrypoint: relativizeEntry(manifest.binaryEntrypoint, sourceRoot),
-            }
-          : {}),
-      },
+      installManifest,
       existing._tag === "Right" ? existing.right : undefined,
+      { trust },
     );
     const installed =
       existing._tag === "Right"
@@ -1688,19 +1840,14 @@ function reviewLocalPlugin(
     }
     const manifest = yield* loadManifest(manifestPath);
     const sourceRoot = dirname(resolveAssetPath(manifestPath));
+    const installManifest = toInstallManifest(manifest, sourceRoot);
+    const trust = yield* loadPluginTrust(installManifest, sourceRoot, booted.config);
     const existing = yield* Effect.either(booted.pluginRegistry.get(manifest.id));
     const plan = createInstallPlan(
       { type: "local", path: sourceRoot },
-      {
-        ...manifest,
-        entry: relativizeEntry(manifest.entry, sourceRoot),
-        ...(manifest.binaryEntrypoint
-          ? {
-              binaryEntrypoint: relativizeEntry(manifest.binaryEntrypoint, sourceRoot),
-            }
-          : {}),
-      },
+      installManifest,
       existing._tag === "Right" ? existing.right : undefined,
+      { trust },
     );
     return { plan: serializeInstallPlan(plan) };
   })();
@@ -1755,21 +1902,13 @@ function installGitHubPlugin(
       ref,
       checkoutPath,
     };
+    const installManifest = toInstallManifest(manifest, checkoutPath);
+    const trust = yield* loadPluginTrust(installManifest, checkoutPath, booted.config);
     const plan = createInstallPlan(
       source,
-      {
-        ...manifest,
-        entry: relativizeEntry(manifest.entry, checkoutPath),
-        ...(manifest.binaryEntrypoint
-          ? {
-              binaryEntrypoint: relativizeEntry(
-                manifest.binaryEntrypoint,
-                checkoutPath,
-              ),
-            }
-          : {}),
-      },
+      installManifest,
       existing._tag === "Right" ? existing.right : undefined,
+      { trust },
     );
     const installed =
       existing._tag === "Right"
@@ -2350,6 +2489,7 @@ function serializeInstalledPlugin(plugin: InstalledPluginRecord) {
     status: plugin.status,
     risk: plugin.manifest.risk,
     source: plugin.source,
+    trust: plugin.trust ?? { signatureStatus: "unsigned" },
     capabilities: plugin.manifest.capabilities,
     toolNames: (plugin.manifest.tools ?? []).map((tool) => tool.name),
     installedAt: plugin.installedAt,
@@ -2543,6 +2683,7 @@ function serializeInstallPlan(plan: ReturnType<typeof createInstallPlan>) {
     requiresApproval: plan.requiresApproval,
     capabilityChanges: plan.capabilityChanges,
     permissionChanges: plan.permissionChanges,
+    trust: plan.trust,
   };
 }
 

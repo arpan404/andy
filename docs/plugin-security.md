@@ -179,6 +179,8 @@ The daemon exposes local plugin management APIs:
 
 Local and GitHub install records are disabled unless explicitly enabled, and enable/disable/remove still flow through registry state, lifecycle state, runtime tool enablement, policy, and audit. GitHub installs require an immutable commit SHA or semver release tag, clone into `.andy/github-plugins`, and store the local checkout path in the registry so daemon startup never executes directly from a remote URL.
 
+Plugin packages may include `plugin.signature.json` next to `plugin.json`. The signature file signs the canonical plugin manifest with Ed25519. Daemon config can list trusted publishers with public keys under `trustedPublishers`; install/review output records plugin trust as `unsigned` or `verified` with the publisher id and public-key fingerprint. Unsigned plugins are still installable, but the user-facing review keeps that trust state explicit.
+
 The `andy` CLI binary wraps these local daemon APIs:
 
 - `andy plugin list`
@@ -225,6 +227,7 @@ Implemented first-party system plugins:
 - `@andy/plugin-memory-markdown` stores inspectable Markdown memory inside `ANDY_PLUGIN_STORAGE_ROOT`.
 - `@andy/plugin-filesystem` restricts read/list/write/delete to manifest-declared roots passed by the host.
 - `@andy/plugin-shell` runs commands without shell interpolation, requires a declared `cwd` root, bounds output, and is expected to be approval-gated by policy.
+- `@andy/plugin-browser` automates a local browser through Chrome DevTools Protocol. It only connects to localhost/127.0.0.1 CDP endpoints, exposes navigation/inspection/click/type/screenshot/form-submit tools, and keeps form submission, typing, screenshots, and navigation policy-gated because browser automation can exfiltrate data or act on behalf of the user.
 - `@andy/plugin-telegram` uses the official Telegram Bot API for polling, send, webhook setup, and update normalization.
 - `@andy/plugin-whatsapp` uses the official Meta Graph API for outbound messages and webhook payload verification/normalization.
 - `@andy/plugin-voice-input`, `@andy/plugin-voice-output`, `@andy/plugin-vision`, and `@andy/plugin-computer-control` expose strict capability surfaces while native capture/provider depth is added incrementally. Voice input supports explicit activation, bounded recording through platform adapters, and transcript/audio handoff. Voice output uses platform adapters (`say`, `spd-say`/`espeak`, or PowerShell `System.Speech`) and supports stopping the active speech process. Vision captures screenshots through platform adapters (`screencapture`, `gnome-screenshot`/`import`/`scrot`, or PowerShell) and prepares AI SDK image parts so multimodal LLMs can receive images directly. Computer control uses platform adapters for macOS (`osascript`), Linux (`xdotool`/`wmctrl`), and Windows (PowerShell/User32/SendKeys), and remains gated by `ANDY_ENABLE_COMPUTER_CONTROL=1` plus policy approval.
@@ -235,6 +238,16 @@ Implemented first-party system plugins:
 - `@andy/plugin-memory-semantic` stores inspectable semantic memory records with a deterministic local vector index; it does not hide memory solely inside an opaque vector database.
 
 These plugins run through subprocess hosting, register only manifest-declared proxy tools, and have lifecycle tests for the security-sensitive paths. Capability behavior stays out of core.
+
+## Secrets
+
+Core exposes a secret broker interface so plugins can request only their declared secret scopes. The daemon now wires an OS-backed broker:
+
+- macOS: Keychain through `security`.
+- Linux: Secret Service through `secret-tool` when available.
+- Windows: Credential Manager through PowerShell and Win32 credential APIs.
+
+If the native store is unavailable, Andy falls back to `.andy/secrets.json` with encoded local records. The fallback file is not a substitute for platform keychain security; it exists so development and unsupported hosts can still exercise the broker contract. Secret requests remain audited and denied when the caller plugin did not declare the requested scope.
 
 ## Upgrade Rule
 

@@ -13,7 +13,7 @@ import { ModelProviderRegistry } from "./model-provider.js";
 import { PluginLifecycleManager } from "./plugin-lifecycle.js";
 import { SubprocessManifestPluginHost } from "./plugin-host.js";
 import { AgentRuntime } from "./runtime.js";
-import { InMemorySecretBroker } from "./secrets.js";
+import { InMemorySecretBroker, type SecretBroker } from "./secrets.js";
 import { AgentSessionStore } from "./session-store.js";
 import type { CoreStateStore } from "./state.js";
 import type { CoreStateStoreError } from "./errors.js";
@@ -32,7 +32,7 @@ export interface AndyDaemonServices {
   background: BackgroundJobScheduler;
   backgroundExecutor: BackgroundJobExecutor;
   cancellation: CancellationRegistry;
-  secrets: InMemorySecretBroker;
+  secrets: SecretBroker;
   hostedPluginHostApi: DefaultHostedPluginHostApi;
   lifecycle: PluginLifecycleManager;
   modelProviders: ModelProviderRegistry;
@@ -43,6 +43,7 @@ export function createAndyDaemon(options: {
   audit: AuditSink;
   policy: PolicyEngine;
   stateStore?: CoreStateStore;
+  secretBroker?: SecretBroker;
 }): Effect.Effect<AndyDaemonServices, CoreStateStoreError> {
   return Effect.fn("createAndyDaemon")(function* () {
     const stateStore = options.stateStore;
@@ -133,7 +134,7 @@ export function createAndyDaemon(options: {
       background,
       backgroundExecutor,
       cancellation,
-      secrets: new InMemorySecretBroker({ audit }),
+      secrets: options.secretBroker ?? new InMemorySecretBroker({ audit }),
       hostedPluginHostApi,
       lifecycle,
       modelProviders: new ModelProviderRegistry(),

@@ -37,9 +37,33 @@
           <span>Approvals</span>
           <strong id="approvalCount">0</strong>
         </article>
+        <article>
+          <span>Events</span>
+          <strong id="eventCount">0</strong>
+        </article>
+        <article>
+          <span>Traces</span>
+          <strong id="traceCount">0</strong>
+        </article>
       </section>
 
       <section class="workspace">
+        <div class="panel wide">
+          <div class="panel-head split">
+            <h2>Timeline</h2>
+            <span id="timelineMeta">latest 50 events</span>
+          </div>
+          <div id="events" class="timeline"></div>
+        </div>
+
+        <div class="panel wide">
+          <div class="panel-head split">
+            <h2>Traces</h2>
+            <span id="traceMeta">active and hydrated trace contexts</span>
+          </div>
+          <div id="traces" class="trace-grid"></div>
+        </div>
+
         <div class="panel">
           <div class="panel-head">
             <h2>Plugins</h2>

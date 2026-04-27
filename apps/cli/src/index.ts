@@ -35,6 +35,11 @@ interface ParsedArgs {
   transcriptPath?: string;
   voice?: string;
   speak: boolean;
+  limit?: number;
+  eventType?: string;
+  traceId?: string;
+  sessionId?: string;
+  fromSequence?: number;
 }
 
 const corePlugin = definePlugin({
@@ -79,6 +84,12 @@ if (parsed.command === "status") {
   await runAskCommand(parsed);
 } else if (parsed.command === "voice") {
   await runVoiceCommand(parsed);
+} else if (
+  parsed.command === "events" ||
+  parsed.command === "logs" ||
+  parsed.command === "traces"
+) {
+  await runObservabilityCommand(parsed);
 } else if (parsed.command === "approval" || parsed.command === "approvals") {
   await runApprovalCommand(parsed);
 } else if (parsed.command === "help" || parsed.command === "--help") {
@@ -357,6 +368,27 @@ async function runApprovalCommand(args: ParsedArgs): Promise<void> {
   throw new Error(`Unknown approval command '${action}'.`);
 }
 
+async function runObservabilityCommand(args: ParsedArgs): Promise<void> {
+  const params = new URLSearchParams();
+  if (args.limit) {
+    params.set("limit", String(args.limit));
+  }
+  if (args.eventType && args.command !== "traces") {
+    params.set("type", args.eventType);
+  }
+  if (args.traceId) {
+    params.set("traceId", args.traceId);
+  }
+  if (args.sessionId && args.command !== "traces") {
+    params.set("sessionId", args.sessionId);
+  }
+  if (args.fromSequence && args.command !== "traces") {
+    params.set("fromSequence", String(args.fromSequence));
+  }
+  const query = params.toString();
+  await printDaemonJson(args.url, "GET", `/${args.command}${query ? `?${query}` : ""}`);
+}
+
 async function printDaemonJson(
   baseUrl: string,
   method: HttpMethod,
@@ -396,6 +428,11 @@ function parseArgs(input: string[]): ParsedArgs {
   let audioPath: string | undefined;
   let transcriptPath: string | undefined;
   let voice: string | undefined;
+  let limit: number | undefined;
+  let eventType: string | undefined;
+  let traceId: string | undefined;
+  let sessionId: string | undefined;
+  let fromSequence: number | undefined;
   const images: { path: string; mediaType?: string }[] = [];
   let force = false;
   let disable = false;
@@ -517,6 +554,43 @@ function parseArgs(input: string[]): ParsedArgs {
       index += 1;
       continue;
     }
+    if (arg === "--limit") {
+      limit = parsePositiveFlag(input[index + 1], "--limit");
+      index += 1;
+      continue;
+    }
+    if (arg === "--type") {
+      const value = input[index + 1];
+      if (!value) {
+        throw new Error("--type requires a value.");
+      }
+      eventType = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--trace-id") {
+      const value = input[index + 1];
+      if (!value) {
+        throw new Error("--trace-id requires a value.");
+      }
+      traceId = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--session-id") {
+      const value = input[index + 1];
+      if (!value) {
+        throw new Error("--session-id requires a value.");
+      }
+      sessionId = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--from-sequence") {
+      fromSequence = parsePositiveFlag(input[index + 1], "--from-sequence");
+      index += 1;
+      continue;
+    }
     if (arg === "--no-speak") {
       speak = false;
       continue;
@@ -606,6 +680,11 @@ function parseArgs(input: string[]): ParsedArgs {
     ...(audioPath ? { audioPath } : {}),
     ...(transcriptPath ? { transcriptPath } : {}),
     ...(voice ? { voice } : {}),
+    ...(limit ? { limit } : {}),
+    ...(eventType ? { eventType } : {}),
+    ...(traceId ? { traceId } : {}),
+    ...(sessionId ? { sessionId } : {}),
+    ...(fromSequence ? { fromSequence } : {}),
     ...(workflowMarker ? { workflow: workflowMarker.slice("__workflow:".length) } : {}),
     ...(modelProviderMarker
       ? { modelProviderId: modelProviderMarker.slice("__modelProvider:".length) }
@@ -614,6 +693,14 @@ function parseArgs(input: string[]): ParsedArgs {
       ? { input: parseJsonResponse(inputMarker.slice("__input:".length)) }
       : {}),
   };
+}
+
+function parsePositiveFlag(value: string | undefined, flag: string): number {
+  const parsed = value ? Number(value) : Number.NaN;
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`${flag} requires a positive number.`);
+  }
+  return parsed;
 }
 
 function guessImageMediaType(path: string): string | undefined {
@@ -709,6 +796,9 @@ Usage:
   andy ask [--skills skill.a,skill.b] [--model-provider id] [--image path] <message>
   andy voice turn [--skills skill.a,skill.b] [--model-provider id] [--audio path|--transcript path|text] [--voice name] [--no-speak]
   andy voice stop
+  andy events [--limit n] [--type event.type] [--trace-id id] [--session-id id] [--from-sequence n]
+  andy logs [--limit n] [--type event.type] [--trace-id id] [--session-id id]
+  andy traces [--limit n] [--trace-id id]
   andy plugin list
   andy plugin install-local <manifestPath> [--enable]
   andy plugin review-local <manifestPath>

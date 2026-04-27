@@ -4,6 +4,13 @@ import type {
   RiskLevel,
 } from "@andy/plugin-sdk";
 import { Effect, Schema } from "effect";
+import {
+  createHash,
+  createPrivateKey,
+  createPublicKey,
+  sign as nodeSign,
+  verify as nodeVerify,
+} from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
@@ -30,6 +37,7 @@ export interface InstalledPluginRecord {
   status: PluginLifecycleStatus;
   installedAt: Date;
   updatedAt: Date;
+  trust?: PluginTrustRecord;
 }
 
 export interface PluginInstallPlan {
@@ -39,6 +47,27 @@ export interface PluginInstallPlan {
   permissionChanges: string[];
   requiresApproval: boolean;
   risk: RiskLevel;
+  trust: PluginTrustRecord;
+}
+
+export interface PluginTrustRecord {
+  signatureStatus: "unsigned" | "verified";
+  publisherId?: string;
+  publicKeyFingerprint?: string;
+  verifiedAt?: Date;
+}
+
+export interface PluginSignatureFile {
+  algorithm: "ed25519";
+  signature: string;
+  publicKey?: string;
+  publisherId?: string;
+  signedAt?: string;
+}
+
+export interface TrustedPluginPublisher {
+  id: string;
+  publicKey: string;
 }
 
 export class PluginRecordNotFoundError extends Schema.TaggedError<PluginRecordNotFoundError>()(
@@ -67,6 +96,7 @@ export function createInstallPlan(
   source: PluginInstallSource,
   manifest: PluginManifest,
   existing?: InstalledPluginRecord,
+  options: { trust?: PluginTrustRecord } = {},
 ): PluginInstallPlan {
   return {
     source,
@@ -78,6 +108,80 @@ export function createInstallPlan(
     permissionChanges: diffPermissions(existing?.manifest, manifest),
     requiresApproval: true,
     risk: manifest.risk,
+    trust: options.trust ?? { signatureStatus: "unsigned" },
+  };
+}
+
+export function signPluginManifest(input: {
+  manifest: PluginManifest;
+  privateKey: string;
+}): PluginSignatureFile {
+  const signature = nodeSign(
+    null,
+    Buffer.from(canonicalPluginManifest(input.manifest), "utf8"),
+    createPrivateKey(input.privateKey),
+  );
+  return {
+    algorithm: "ed25519",
+    signature: signature.toString("base64"),
+  };
+}
+
+export function verifyPluginManifestSignature(input: {
+  manifest: PluginManifest;
+  signature: PluginSignatureFile | undefined;
+  trustedPublishers: readonly TrustedPluginPublisher[];
+}): PluginTrustRecord {
+  if (!input.signature) {
+    return { signatureStatus: "unsigned" };
+  }
+  const publisher = input.trustedPublishers.find(
+    (candidate) =>
+      candidate.id === input.signature?.publisherId ||
+      candidate.publicKey === input.signature?.publicKey,
+  );
+  const publicKey = publisher?.publicKey ?? input.signature.publicKey;
+  if (!publicKey) {
+    return { signatureStatus: "unsigned" };
+  }
+  const verified = nodeVerify(
+    null,
+    Buffer.from(canonicalPluginManifest(input.manifest), "utf8"),
+    createPublicKey(publicKey),
+    Buffer.from(input.signature.signature, "base64"),
+  );
+  if (!verified) {
+    return { signatureStatus: "unsigned" };
+  }
+  return {
+    signatureStatus: "verified",
+    ...(publisher?.id || input.signature.publisherId
+      ? { publisherId: publisher?.id ?? input.signature.publisherId }
+      : {}),
+    publicKeyFingerprint: fingerprintPublicKey(publicKey),
+    verifiedAt: new Date(),
+  };
+}
+
+export function parsePluginSignatureFile(input: unknown): PluginSignatureFile {
+  if (typeof input !== "object" || input === null) {
+    throw new Error("Plugin signature must be an object.");
+  }
+  const record = input as Partial<PluginSignatureFile>;
+  if (record.algorithm !== "ed25519") {
+    throw new Error("Plugin signature algorithm must be ed25519.");
+  }
+  if (typeof record.signature !== "string") {
+    throw new Error("Plugin signature is required.");
+  }
+  return {
+    algorithm: "ed25519",
+    signature: record.signature,
+    ...(typeof record.publicKey === "string" ? { publicKey: record.publicKey } : {}),
+    ...(typeof record.publisherId === "string"
+      ? { publisherId: record.publisherId }
+      : {}),
+    ...(typeof record.signedAt === "string" ? { signedAt: record.signedAt } : {}),
   };
 }
 
@@ -94,6 +198,7 @@ export class InMemoryPluginRegistry {
           status: "installed",
           installedAt: now,
           updatedAt: now,
+          trust: normalizeTrustRecord(plan.trust),
         };
         this.#records.set(plan.manifest.id, record);
         return record;
@@ -150,6 +255,7 @@ export class InMemoryPluginRegistry {
         status: existing.status === "removed" ? "installed" : existing.status,
         installedAt: existing.installedAt,
         updatedAt: new Date(),
+        trust: normalizeTrustRecord(plan.trust),
       };
       this.#records.set(plan.manifest.id, updated);
       return updated;
@@ -412,7 +518,42 @@ function normalizeRecordDates(record: InstalledPluginRecord): InstalledPluginRec
     ...record,
     installedAt: new Date(record.installedAt),
     updatedAt: new Date(record.updatedAt),
+    ...(record.trust ? { trust: normalizeTrustRecord(record.trust) } : {}),
   };
+}
+
+function normalizeTrustRecord(record: PluginTrustRecord): PluginTrustRecord {
+  return {
+    signatureStatus: record.signatureStatus,
+    ...(record.publisherId ? { publisherId: record.publisherId } : {}),
+    ...(record.publicKeyFingerprint
+      ? { publicKeyFingerprint: record.publicKeyFingerprint }
+      : {}),
+    ...(record.verifiedAt ? { verifiedAt: new Date(record.verifiedAt) } : {}),
+  };
+}
+
+function canonicalPluginManifest(manifest: PluginManifest): string {
+  return stableStringify(manifest);
+}
+
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+  }
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .sort()
+    .filter((key) => record[key] !== undefined)
+    .map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`)
+    .join(",")}}`;
+}
+
+function fingerprintPublicKey(publicKey: string): string {
+  return createHash("sha256").update(publicKey).digest("hex");
 }
 
 function isFileNotFound(cause: unknown): boolean {

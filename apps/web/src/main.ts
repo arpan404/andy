@@ -18,6 +18,14 @@ async function load() {
   setText("#pluginCount", String(asArray(status.installedPlugins).length));
   setText("#skillCount", String(asArray(status.skills).length));
   setText("#approvalCount", String(asArray(status.approvals).length));
+  setText("#eventCount", String(status.eventCount ?? "0"));
+  setText("#traceCount", String(status.traceCount ?? "0"));
+  const [events, traces] = await Promise.all([
+    request("/events?limit=50"),
+    request("/traces?limit=50"),
+  ]);
+  renderEventTimeline("#events", asRecordArray(events.events));
+  renderTraceList("#traces", asRecordArray(traces.traces));
   renderLifecycleList(
     "#plugins",
     asRecordArray(status.installedPlugins),
@@ -83,6 +91,10 @@ interface DaemonStatus extends Record<string, unknown> {
   installedPlugins?: unknown;
   skills?: unknown;
   approvals?: unknown;
+  events?: unknown;
+  traces?: unknown;
+  eventCount?: unknown;
+  traceCount?: unknown;
 }
 
 async function request(path: string, init?: RequestInit): Promise<DaemonStatus> {
@@ -97,6 +109,14 @@ async function request(path: string, init?: RequestInit): Promise<DaemonStatus> 
 interface ListRecord extends Record<string, unknown> {
   id?: unknown;
   status?: unknown;
+  event?: unknown;
+  sequence?: unknown;
+  publishedAt?: unknown;
+  name?: unknown;
+  traceId?: unknown;
+  startedAt?: unknown;
+  parentTraceId?: unknown;
+  type?: unknown;
 }
 
 function renderLifecycleList(
@@ -165,6 +185,64 @@ function renderApprovalList(selector: string, items: readonly ListRecord[]) {
   }
 }
 
+function renderEventTimeline(selector: string, items: readonly ListRecord[]) {
+  const node = document.querySelector(selector);
+  if (!node) return;
+  node.innerHTML = "";
+  if (items.length === 0) {
+    node.append(emptyState("No events recorded yet."));
+    return;
+  }
+  for (const item of items.toReversed()) {
+    const event = asRecord(item.event);
+    const type = String(event?.type ?? "unknown");
+    const sequence = String(item.sequence ?? "");
+    const row = document.createElement("div");
+    row.className = `event ${riskClass(type)}`;
+    row.innerHTML = `
+      <div class="event-marker">${escapeHtml(sequence)}</div>
+      <div class="event-body">
+        <div class="event-title">${escapeHtml(type)}</div>
+        <div class="event-meta">${escapeHtml(String(item.publishedAt ?? ""))}</div>
+        <pre>${escapeHtml(JSON.stringify(event ?? item, null, 2))}</pre>
+      </div>
+    `;
+    node.append(row);
+  }
+}
+
+function renderTraceList(selector: string, items: readonly ListRecord[]) {
+  const node = document.querySelector(selector);
+  if (!node) return;
+  node.innerHTML = "";
+  if (items.length === 0) {
+    node.append(emptyState("No trace contexts are active or hydrated."));
+    return;
+  }
+  for (const item of items.toReversed()) {
+    const row = document.createElement("div");
+    row.className = "trace";
+    row.innerHTML = `
+      <strong>${escapeHtml(String(item.name ?? "trace"))}</strong>
+      <code>${escapeHtml(String(item.traceId ?? ""))}</code>
+      <small>${escapeHtml(String(item.startedAt ?? ""))}</small>
+      ${
+        item.parentTraceId
+          ? `<small>parent ${escapeHtml(String(item.parentTraceId))}</small>`
+          : ""
+      }
+    `;
+    node.append(row);
+  }
+}
+
+function emptyState(message: string): HTMLElement {
+  const node = document.createElement("p");
+  node.className = "empty";
+  node.textContent = message;
+  return node;
+}
+
 function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
@@ -174,6 +252,22 @@ function asRecordArray(value: unknown): ListRecord[] {
     (item): item is Record<string, unknown> =>
       typeof item === "object" && item !== null && !Array.isArray(item),
   );
+}
+
+function asRecord(value: unknown): ListRecord | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as ListRecord)
+    : undefined;
+}
+
+function riskClass(type: string): string {
+  if (type.includes("approval") || type.includes("policy")) {
+    return "event-warn";
+  }
+  if (type.includes("secret") || type.includes("tool")) {
+    return "event-hot";
+  }
+  return "event-calm";
 }
 
 function setText(selector: string, value: string) {

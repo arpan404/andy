@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Effect } from "effect";
+import { generateKeyPairSync } from "node:crypto";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -7,6 +8,8 @@ import {
   createInstallPlan,
   InMemoryPluginRegistry,
   JsonFilePluginRegistry,
+  signPluginManifest,
+  verifyPluginManifestSignature,
 } from "./index.js";
 
 describe("createInstallPlan", () => {
@@ -47,6 +50,48 @@ describe("createInstallPlan", () => {
       "filesystem.read_sensitive:~/Library/Application Support/ExampleApp",
       "network:api.example.com",
     ]);
+  });
+
+  test("carries verified plugin signature trust into install records", async () => {
+    const { privateKey, publicKey } = generateKeyPairSync("ed25519", {
+      privateKeyEncoding: { format: "pem", type: "pkcs8" },
+      publicKeyEncoding: { format: "pem", type: "spki" },
+    });
+    const manifest = {
+      id: "andy.signed",
+      name: "Signed",
+      version: "0.1.0",
+      entry: "./dist/index.js",
+      capabilities: ["memory.save"],
+      risk: "medium" as const,
+    };
+    const signature = {
+      ...signPluginManifest({ manifest, privateKey }),
+      publisherId: "andy-first-party",
+    };
+    const trust = verifyPluginManifestSignature({
+      manifest,
+      signature,
+      trustedPublishers: [{ id: "andy-first-party", publicKey }],
+    });
+    const registry = new InMemoryPluginRegistry();
+
+    const installed = await Effect.runPromise(
+      registry.install(
+        createInstallPlan(
+          { type: "local", path: "./plugins/signed" },
+          manifest,
+          undefined,
+          { trust },
+        ),
+      ),
+    );
+
+    expect(installed.trust).toMatchObject({
+      signatureStatus: "verified",
+      publisherId: "andy-first-party",
+    });
+    expect(installed.trust?.publicKeyFingerprint).toHaveLength(64);
   });
 });
 

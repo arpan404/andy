@@ -8,12 +8,14 @@ Andy Core should stay small and trusted. It should provide the kernel, policy bo
 - CLI binary packaging uses Bun standalone executable compilation through `bun run build:binary`.
 - Daemon app boots config, loads enabled plugin manifests through lifecycle, polls due background jobs, saves state, handles shutdown, and can be compiled with `bun run build:daemon-binary`.
 - AI SDK model provider package (`@andy/model-ai-sdk`) registers Vercel AI SDK models behind the core model-provider registry. Andy does not integrate with provider-native SDKs directly.
-- First-party system plugins now exist for Markdown memory, persistent memory, semantic memory, scoped filesystem access, approval-gated shell execution, Telegram, WhatsApp, voice input/output, vision, computer-control, background-worker, notifications, and swarm-orchestrator capability surfaces.
+- First-party system plugins now exist for Markdown memory, persistent memory, semantic memory, scoped filesystem access, approval-gated shell execution, local browser automation, Telegram, WhatsApp, voice input/output, vision, computer-control, background-worker, notifications, and swarm-orchestrator capability surfaces.
 - Skills now exist as declarative workflow packages with `@andy/skill-sdk`, `@andy/skill-manager`, daemon APIs, CLI commands, and local first-party skill manifests under `skills/`.
 - Plugin-bundled skills are discovered from plugin manifests or `skills/**/skill.json` and installed as plugin-owned skill records.
 - The project coding plugin provides scoped read/write/search/diff/run-check tools plus bundled Effect TS and React coding skills.
 - The local web console provides a first UI surface for daemon status, plugin/skill inventory, approvals, and skill runs.
+- Observability is exposed through daemon event/log/trace endpoints, CLI commands, and web console timeline/trace views.
 - Release packaging now assembles CLI, daemon, web assets, global skills, plugin manifests, plugin binaries, and plugin-bundled skills into `dist/release/andy-<version>-<platform>-<arch>/`.
+- Release packaging also creates a tarball and SHA-256 checksum under `dist/installers/`.
 - The release bundle includes `andy-desktop`, a local controller app for starting/stopping the daemon and web console from one binary while product capabilities remain behind plugins and daemon APIs.
 - Daemon remote control supports Telegram polling/webhook mode and WhatsApp webhook mode: inbound messages are normalized, published through the communication bridge, handled by an agent session using a configured AI SDK model provider, and replied to through the channel plugin.
 - Daemon HTTP ingress exposes health/status, approval list/decision endpoints, and Telegram/WhatsApp webhook endpoints with optional shared-secret verification.
@@ -49,7 +51,7 @@ Andy Core should stay small and trusted. It should provide the kernel, policy bo
 - Default hosted-plugin host API handler forwards sandboxed plugin syscall requests back through runtime tools.
 - Daemon service graph composes runtime, communication, approvals, approval resume, background, secrets, and hosted plugin host API handler.
 - Rule-based policy wrapper supports per-capability, per-plugin, per-user, per-channel, and risk-based policy rules.
-- JSON file secret broker provides an early durable secret-store scaffold with encoded values.
+- The daemon wires an OS secret broker backed by macOS Keychain, Linux Secret Service, or Windows Credential Manager, with encoded JSON fallback for development/unsupported hosts.
 - Background job scheduler with due-job lookup, progress events, hydration, and status transitions.
 - Core state store contract with in-memory and JSON file implementations.
 - Cancellation token registry and timeout helper.
@@ -149,7 +151,7 @@ Still needed: durable event streams, stronger subscriber backpressure, and app/d
 
 ### Secret Broker Interface
 
-Core has an initial secret broker contract that lets plugins request declared secret scopes without exposing raw credentials broadly. Secret references are redacted and rotation is audited.
+Core has a secret broker contract that lets plugins request declared secret scopes without exposing raw credentials broadly. Secret references are redacted and rotation is audited. The daemon uses `OsSecretBroker`, which tries the platform secret store before falling back to encoded `.andy/secrets.json` records.
 
 Still needed: policy checks and app-specific backing stores.
 
@@ -167,6 +169,7 @@ The first-party plugin packages are now real subprocess-hosted packages with man
 - Voice input needs a speech-to-text provider plugin and explicit microphone capture adapter.
 - Vision now prepares image bytes for direct multimodal LLM input and has platform screenshot adapters. Remaining depth is provider-specific OCR helpers and screen-understanding workflows.
 - Computer control needs a richer accessibility adapter and cross-platform implementations.
+- Browser automation now has a first-party CDP plugin for localhost browser control. Remaining depth is browser process launch/profile management, accessibility-backed element targeting, and stronger policy around external navigation and form submission.
 - Filesystem sensitive reads need a separate `filesystem.read_sensitive` tool and policy path.
 - Filesystem sensitive reads now have a separate `filesystem.read_sensitive` tool and critical capability path.
 - Notifications need native desktop and remote notification adapters beyond plugin-storage delivery records.
@@ -186,7 +189,9 @@ Policy decisions must remain explicit for external messaging, filesystem writes,
 
 ### Observability And Tracing
 
-Core has a trace manager and trace ids are threaded through agent sessions, model requests, tool requests, policy decisions, plugin execution audits, and background jobs. It still needs full trace ids across:
+Core has a trace manager and trace ids are threaded through agent sessions, model requests, tool requests, policy decisions, plugin execution audits, and background jobs. Daemon HTTP now exposes `/events`, `/logs`, and `/traces`, the CLI wraps them with `andy events`, `andy logs`, and `andy traces`, and the web console includes a read-only timeline and trace list.
+
+It still needs full trace ids across:
 
 - approval
 - memory write
@@ -203,12 +208,7 @@ No plugin or child agent should run indefinitely without an inspectable state an
 
 Core has plugin installer and manifest fetcher interfaces with manifest validation, schema compatibility checks, source pin planning, permission summaries, and disabled-by-default local materialization.
 
-Still needed:
-
-- pin to commit SHA or immutable tag
-- display requested permissions
-- install disabled by default or enable after approval
-- block upgrade permission expansion without approval
+Local and GitHub installs pin reviewed source, display permission summaries, install disabled by default, and block upgrade permission expansion without approval. Plugin review/install now records trust state from optional Ed25519 `plugin.signature.json` files verified against configured trusted publishers.
 
 Marketplace support can be layered on later.
 

@@ -70,6 +70,13 @@ This runs the workspace build, compiles first-party plugin workers, compiles the
 dist/release/andy-<version>-<platform>-<arch>/
 ```
 
+It also writes a compressed install archive and checksum:
+
+```text
+dist/installers/andy-<version>-<platform>-<arch>.tar.gz
+dist/installers/andy-<version>-<platform>-<arch>.tar.gz.sha256
+```
+
 Package layout:
 
 ```text
@@ -87,6 +94,8 @@ release.json
 ```
 
 `release.json` records the package platform, architecture, binaries, plugin manifests, plugin binary paths, bundled skills, and global skills. Release packaging fails if a required binary, plugin manifest, plugin worker binary, global skill manifest, or web asset is missing.
+
+The archive checksum is SHA-256 and is intended for first-release distribution verification. Codesigning, notarization, platform-native installers, and updater metadata remain separate release channels layered on top of the same package layout.
 
 ## Desktop Controller
 
@@ -124,6 +133,8 @@ The compiled `dist/andy` binary can manage a running daemon:
 ./dist/andy voice turn "Summarize current Andy status"
 ./dist/andy voice stop
 ./dist/andy approval list
+./dist/andy events --limit 25
+./dist/andy traces --limit 25
 ```
 
 Use `--url http://host:port` or `ANDY_DAEMON_URL` to target a daemon that is not listening on `http://127.0.0.1:8765`.

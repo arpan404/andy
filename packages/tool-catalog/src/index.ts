@@ -53,6 +53,10 @@ export const Capabilities = {
   },
   browser: {
     navigate: "browser.navigate",
+    inspect: "browser.inspect",
+    click: "browser.click",
+    type: "browser.type",
+    screenshot: "browser.screenshot",
     submitForm: "browser.submit_form",
   },
   background: {
@@ -123,6 +127,14 @@ export const Tools = {
     transcribe: "voice.transcribe",
     speak: "voice.speak",
     stop: "voice.stop",
+  },
+  browser: {
+    navigate: "browser.navigate",
+    inspect: "browser.inspect",
+    click: "browser.click",
+    type: "browser.type",
+    screenshot: "browser.screenshot",
+    submitForm: "browser.submit_form",
   },
   secrets: {
     get: "secrets.get",
