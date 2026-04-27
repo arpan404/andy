@@ -23,6 +23,8 @@ This list tracks the first production path now that the core kernel is ready eno
 17. Add a first-party browser automation plugin and harden daemon secrets with OS-backed storage. Done on `feature/browser-plugin-secrets-broker`.
 18. Add daemon/CLI/web observability for events, logs, and traces. Done.
 19. Add plugin signature trust records and release tarball/checksum artifacts. Done.
+20. Add ACP stdio mode for agent-client communication and keep HTTP limited to web console/admin/webhook surfaces. Done on `feature/browser-plugin-secrets-broker`.
+21. Add first-party Codex plugin for local Codex SDK/CLI subscription-backed delegation, disabled by default and approval-required. Done on `feature/browser-plugin-secrets-broker`.
 
 ## Core Completion Todo
 

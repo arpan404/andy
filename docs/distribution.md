@@ -141,6 +141,16 @@ Use `--url http://host:port` or `ANDY_DAEMON_URL` to target a daemon that is not
 
 `andy setup` can run before the daemon is already running. It creates the selected home directory and initializes `.andy/daemon.json` by invoking the sibling `andy-daemon --init` binary. Use `--force` only when intentionally recreating that config.
 
+## ACP Stdio Mode
+
+The daemon can run as an ACP-style stdio server for agent-client integrations:
+
+```bash
+./dist/andy-daemon --acp
+```
+
+ACP is the preferred transport for IDEs, desktop controllers, and agent clients that need to create or resume sessions and submit prompts. The local HTTP API still exists for web console/admin operations and messaging webhooks, but new agent-client integrations should use ACP. See [ACP](./acp.md).
+
 ## Validation
 
 Before shipping a binary:

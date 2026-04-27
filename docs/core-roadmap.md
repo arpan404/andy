@@ -8,7 +8,7 @@ Andy Core should stay small and trusted. It should provide the kernel, policy bo
 - CLI binary packaging uses Bun standalone executable compilation through `bun run build:binary`.
 - Daemon app boots config, loads enabled plugin manifests through lifecycle, polls due background jobs, saves state, handles shutdown, and can be compiled with `bun run build:daemon-binary`.
 - AI SDK model provider package (`@andy/model-ai-sdk`) registers Vercel AI SDK models behind the core model-provider registry. Andy does not integrate with provider-native SDKs directly.
-- First-party system plugins now exist for Markdown memory, persistent memory, semantic memory, scoped filesystem access, approval-gated shell execution, local browser automation, Telegram, WhatsApp, voice input/output, vision, computer-control, background-worker, notifications, and swarm-orchestrator capability surfaces.
+- First-party system plugins now exist for Markdown memory, persistent memory, semantic memory, scoped filesystem access, approval-gated shell execution, local browser automation, Codex delegation, Telegram, WhatsApp, voice input/output, vision, computer-control, background-worker, notifications, and swarm-orchestrator capability surfaces.
 - Skills now exist as declarative workflow packages with `@andy/skill-sdk`, `@andy/skill-manager`, daemon APIs, CLI commands, and local first-party skill manifests under `skills/`.
 - Plugin-bundled skills are discovered from plugin manifests or `skills/**/skill.json` and installed as plugin-owned skill records.
 - The project coding plugin provides scoped read/write/search/diff/run-check tools plus bundled Effect TS and React coding skills.
@@ -19,6 +19,7 @@ Andy Core should stay small and trusted. It should provide the kernel, policy bo
 - The release bundle includes `andy-desktop`, a local controller app for starting/stopping the daemon and web console from one binary while product capabilities remain behind plugins and daemon APIs.
 - Daemon remote control supports Telegram polling/webhook mode and WhatsApp webhook mode: inbound messages are normalized, published through the communication bridge, handled by an agent session using a configured AI SDK model provider, and replied to through the channel plugin.
 - Daemon HTTP ingress exposes health/status, approval list/decision endpoints, and Telegram/WhatsApp webhook endpoints with optional shared-secret verification.
+- ACP stdio mode exists for agent-client communication. HTTP remains for web console/admin and webhook surfaces while clients migrate to ACP.
 - Agent session kernel with AI SDK result types.
 - Agent requests can include image parts that are passed to Vercel AI SDK model messages for multimodal providers.
 - Local voice turns route through voice plugins: transcript/audio handoff, agent run, and optional platform TTS response.

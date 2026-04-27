@@ -228,6 +228,7 @@ Implemented first-party system plugins:
 - `@andy/plugin-filesystem` restricts read/list/write/delete to manifest-declared roots passed by the host.
 - `@andy/plugin-shell` runs commands without shell interpolation, requires a declared `cwd` root, bounds output, and is expected to be approval-gated by policy.
 - `@andy/plugin-browser` automates a local browser through Chrome DevTools Protocol. It only connects to localhost/127.0.0.1 CDP endpoints, exposes navigation/inspection/click/type/screenshot/form-submit tools, and keeps form submission, typing, screenshots, and navigation policy-gated because browser automation can exfiltrate data or act on behalf of the user.
+- `@andy/plugin-codex` delegates coding work to the locally authenticated OpenAI Codex SDK/CLI flow. It is disabled by default, declares `codex.run` and `codex.thread`, and requires approval because it invokes a nested coding agent that may inspect, edit, or execute code in the configured workspace.
 - `@andy/plugin-telegram` uses the official Telegram Bot API for polling, send, webhook setup, and update normalization.
 - `@andy/plugin-whatsapp` uses the official Meta Graph API for outbound messages and webhook payload verification/normalization.
 - `@andy/plugin-voice-input`, `@andy/plugin-voice-output`, `@andy/plugin-vision`, and `@andy/plugin-computer-control` expose strict capability surfaces while native capture/provider depth is added incrementally. Voice input supports explicit activation, bounded recording through platform adapters, and transcript/audio handoff. Voice output uses platform adapters (`say`, `spd-say`/`espeak`, or PowerShell `System.Speech`) and supports stopping the active speech process. Vision captures screenshots through platform adapters (`screencapture`, `gnome-screenshot`/`import`/`scrot`, or PowerShell) and prepares AI SDK image parts so multimodal LLMs can receive images directly. Computer control uses platform adapters for macOS (`osascript`), Linux (`xdotool`/`wmctrl`), and Windows (PowerShell/User32/SendKeys), and remains gated by `ANDY_ENABLE_COMPUTER_CONTROL=1` plus policy approval.
@@ -252,3 +253,9 @@ If the native store is unavailable, Andy falls back to `.andy/secrets.json` with
 ## Upgrade Rule
 
 Plugin upgrades must not silently add capabilities. If the new manifest asks for more capabilities, network hosts, filesystem roots, or secret scopes, the user must approve the change before the plugin is enabled.
+
+## Agent Client Protocol
+
+Andy supports ACP-style stdio communication through `andy-daemon --acp`. ACP is the preferred client-agent protocol for local IDEs and controller apps. The HTTP API remains for web console/admin operations and messaging webhooks, but it should not become the primary agent-client transport.
+
+ACP prompts still execute through the same `AgentKernel`, plugin runtime, policy engine, approvals, cancellation registry, and audit surfaces. ACP does not grant a client direct access to undeclared plugin capabilities.

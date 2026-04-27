@@ -47,6 +47,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
+import { createInterface } from "node:readline";
 
 interface DaemonConfig {
   statePath: string;
@@ -147,6 +148,12 @@ if (args.has("--once")) {
   await Effect.runPromise(booted.services.backgroundExecutor.runDue());
   await Effect.runPromise(booted.services.saveState());
   console.log(JSON.stringify(createStatus(booted), null, 2));
+  await Effect.runPromise(shutdownDaemon(booted));
+  process.exit(0);
+}
+
+if (args.has("--acp")) {
+  await runAcpStdioServer(booted);
   await Effect.runPromise(shutdownDaemon(booted));
   process.exit(0);
 }
@@ -642,6 +649,8 @@ function createDefaultConfig(): DaemonConfig {
       "browser.type",
       "browser.screenshot",
       "browser.submit_form",
+      "codex.run",
+      "codex.thread",
       "computer.mouse",
       "computer.keyboard",
       "computer.window",
@@ -678,6 +687,8 @@ function createDefaultConfig(): DaemonConfig {
       "browser.type",
       "browser.screenshot",
       "browser.submit_form",
+      "codex.run",
+      "codex.thread",
       "computer.mouse",
       "computer.keyboard",
       "computer.window",
@@ -707,6 +718,7 @@ function createDefaultConfig(): DaemonConfig {
       { manifestPath: "plugins/voice-output/plugin.json", enabled: false },
       { manifestPath: "plugins/vision/plugin.json", enabled: false },
       { manifestPath: "plugins/browser/plugin.json", enabled: false },
+      { manifestPath: "plugins/codex/plugin.json", enabled: false },
       { manifestPath: "plugins/computer-control/plugin.json", enabled: false },
       { manifestPath: "plugins/background-worker/plugin.json", enabled: false },
       { manifestPath: "plugins/notifications/plugin.json", enabled: false },
@@ -1319,6 +1331,390 @@ function registerMessagingChannels(
       });
     }
   })();
+}
+
+type JsonRpcId = string | number | null;
+
+interface JsonRpcRequest {
+  jsonrpc?: "2.0";
+  id?: JsonRpcId;
+  method?: string;
+  params?: unknown;
+}
+
+interface AcpSessionState {
+  andySessionId: string;
+  cwd: string;
+  cancellationTokenId?: string;
+}
+
+async function runAcpStdioServer(booted: BootedDaemon): Promise<void> {
+  const sessions = new Map<string, AcpSessionState>();
+  const lines = createInterface({
+    input: process.stdin,
+    crlfDelay: Number.POSITIVE_INFINITY,
+  });
+
+  for await (const line of lines) {
+    if (!line.trim()) {
+      continue;
+    }
+
+    let message: JsonRpcRequest;
+    try {
+      const parsed: unknown = JSON.parse(line);
+      message = isJsonObject(parsed) ? (parsed as JsonRpcRequest) : {};
+    } catch (cause) {
+      writeJsonRpcError(null, -32700, "Parse error", stringifyUnknown(cause));
+      continue;
+    }
+
+    if (typeof message.method !== "string") {
+      if (message.id !== undefined) {
+        writeJsonRpcError(message.id, -32600, "Invalid Request");
+      }
+      continue;
+    }
+
+    if (message.id === undefined) {
+      await Effect.runPromise(
+        handleAcpNotification(booted, sessions, message).pipe(
+          Effect.catchAll((cause) =>
+            Effect.sync(() =>
+              console.error(
+                JSON.stringify({
+                  ts: new Date().toISOString(),
+                  transport: "acp",
+                  error: stringifyUnknown(cause),
+                }),
+              ),
+            ),
+          ),
+        ),
+      );
+      continue;
+    }
+
+    const result = await Effect.runPromise(
+      handleAcpRequest(booted, sessions, message).pipe(Effect.either),
+    );
+    if (result._tag === "Left") {
+      writeJsonRpcError(message.id, -32000, stringifyUnknown(result.left));
+      continue;
+    }
+    writeJsonRpcResult(message.id, result.right);
+  }
+}
+
+function handleAcpNotification(
+  booted: BootedDaemon,
+  sessions: Map<string, AcpSessionState>,
+  message: JsonRpcRequest,
+): Effect.Effect<void, unknown> {
+  return Effect.fn("daemon.acp.notification")(function* () {
+    if (message.method !== "session/cancel") {
+      return;
+    }
+    const params = isJsonObject(message.params) ? message.params : {};
+    const sessionId = optionalJsonString(params, "sessionId");
+    if (!sessionId) {
+      return;
+    }
+    const session = sessions.get(sessionId);
+    if (!session?.cancellationTokenId) {
+      return;
+    }
+    yield* booted.services.cancellation.cancel(
+      session.cancellationTokenId,
+      "ACP session cancellation requested by client.",
+    );
+  })();
+}
+
+function handleAcpRequest(
+  booted: BootedDaemon,
+  sessions: Map<string, AcpSessionState>,
+  message: JsonRpcRequest,
+): Effect.Effect<JsonValue, unknown> {
+  return Effect.fn("daemon.acp.request")(function* () {
+    switch (message.method) {
+      case "initialize":
+        return createAcpInitializeResponse(message.params);
+      case "session/new":
+        return yield* createAcpSession(booted, sessions, message.params);
+      case "session/resume":
+      case "session/load":
+        return yield* resumeAcpSession(sessions, message.params);
+      case "session/list":
+        return listAcpSessions(booted);
+      case "session/close":
+        return yield* closeAcpSession(booted, sessions, message.params);
+      case "session/prompt":
+        return yield* promptAcpSession(booted, sessions, message.params);
+      default:
+        return yield* Effect.fail(
+          new Error(`Unsupported ACP method '${message.method}'.`),
+        );
+    }
+  })();
+}
+
+function createAcpInitializeResponse(params: unknown): JsonValue {
+  const requestedVersion = isJsonObject(params)
+    ? optionalJsonString(params, "protocolVersion")
+    : undefined;
+  return {
+    protocolVersion: requestedVersion ?? "1",
+    agentInfo: {
+      name: "Andy",
+      version: "0.1.0",
+    },
+    agentCapabilities: {
+      loadSession: true,
+      mcpCapabilities: {
+        http: false,
+        sse: false,
+      },
+      promptCapabilities: {
+        audio: false,
+        embeddedContext: false,
+        image: true,
+      },
+      sessionCapabilities: {
+        list: true,
+        resume: true,
+        close: true,
+      },
+    },
+    authMethods: [],
+  };
+}
+
+function createAcpSession(
+  booted: BootedDaemon,
+  sessions: Map<string, AcpSessionState>,
+  params: unknown,
+): Effect.Effect<JsonValue, unknown> {
+  return Effect.fn("daemon.acp.sessionNew")(function* () {
+    const payload = isJsonObject(params) ? params : {};
+    const cwd = optionalJsonString(payload, "cwd") ?? process.cwd();
+    const sessionId = crypto.randomUUID();
+    sessions.set(sessionId, {
+      andySessionId: `acp:${sessionId}`,
+      cwd,
+    });
+    yield* booted.services.saveState();
+    return {
+      sessionId,
+      modes: null,
+      configOptions: null,
+    };
+  })();
+}
+
+function resumeAcpSession(
+  sessions: Map<string, AcpSessionState>,
+  params: unknown,
+): Effect.Effect<JsonValue, unknown> {
+  return Effect.fn("daemon.acp.sessionResume")(function* () {
+    const payload = isJsonObject(params) ? params : {};
+    const sessionId = optionalJsonString(payload, "sessionId");
+    if (!sessionId) {
+      return yield* Effect.fail(new Error("ACP sessionId is required."));
+    }
+    const cwd = optionalJsonString(payload, "cwd") ?? process.cwd();
+    sessions.set(sessionId, {
+      andySessionId: sessionId.startsWith("acp:") ? sessionId : `acp:${sessionId}`,
+      cwd,
+    });
+    return {
+      configOptions: null,
+      modes: null,
+    };
+  })();
+}
+
+function listAcpSessions(booted: BootedDaemon): JsonValue {
+  return {
+    sessions: booted.services.sessions.list().map((session) => ({
+      sessionId: session.id,
+      updatedAt: session.updatedAt.toISOString(),
+    })),
+    nextCursor: null,
+  };
+}
+
+function closeAcpSession(
+  booted: BootedDaemon,
+  sessions: Map<string, AcpSessionState>,
+  params: unknown,
+): Effect.Effect<JsonValue, unknown> {
+  return Effect.fn("daemon.acp.sessionClose")(function* () {
+    const payload = isJsonObject(params) ? params : {};
+    const sessionId = optionalJsonString(payload, "sessionId");
+    if (!sessionId) {
+      return yield* Effect.fail(new Error("ACP sessionId is required."));
+    }
+    const session = sessions.get(sessionId);
+    if (session?.cancellationTokenId) {
+      yield* booted.services.cancellation.cancel(
+        session.cancellationTokenId,
+        "ACP session closed.",
+      );
+    }
+    sessions.delete(sessionId);
+    return {};
+  })();
+}
+
+function promptAcpSession(
+  booted: BootedDaemon,
+  sessions: Map<string, AcpSessionState>,
+  params: unknown,
+): Effect.Effect<JsonValue, unknown> {
+  return Effect.fn("daemon.acp.sessionPrompt")(function* () {
+    const payload = isJsonObject(params) ? params : {};
+    const sessionId = optionalJsonString(payload, "sessionId");
+    if (!sessionId) {
+      return yield* Effect.fail(new Error("ACP sessionId is required."));
+    }
+    const session =
+      sessions.get(sessionId) ??
+      ({
+        andySessionId: `acp:${sessionId}`,
+        cwd: process.cwd(),
+      } satisfies AcpSessionState);
+    const prompt = readJsonProperty(payload, "prompt");
+    const normalized = normalizeAcpPrompt(prompt);
+    const modelProviderId = selectAcpModelProvider(booted.config);
+    const runner = yield* booted.services.modelProviders.createRunner(modelProviderId);
+    const token = yield* booted.services.cancellation.create();
+    sessions.set(sessionId, {
+      ...session,
+      cancellationTokenId: token.id,
+    });
+    const kernel = new AgentKernel({
+      runtime: booted.services.runtime,
+      llm: runner,
+      audit: booted.services.audit,
+      cancellation: booted.services.cancellation,
+      sessionStore: booted.services.sessions,
+    });
+    const result = yield* Effect.either(
+      kernel.run({
+        sessionId: session.andySessionId,
+        userMessage: normalized.text,
+        channelId: "acp",
+        conversationId: sessionId,
+        cancellationTokenId: token.id,
+        ...(normalized.images.length > 0 ? { images: normalized.images } : {}),
+      }),
+    );
+    yield* booted.services.saveState();
+    if (result._tag === "Left") {
+      if (String(result.left).includes("cancelled")) {
+        return { stopReason: "cancelled" };
+      }
+      return yield* Effect.fail(result.left);
+    }
+    writeJsonRpcNotification("session/update", {
+      sessionId,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: {
+          type: "text",
+          text: result.right.response,
+        },
+      },
+    });
+    return { stopReason: "end_turn" };
+  })();
+}
+
+function normalizeAcpPrompt(value: JsonValue | undefined): {
+  text: string;
+  images: { data: string; mediaType?: string }[];
+} {
+  const blocks = Array.isArray(value) ? value : [];
+  const text: string[] = [];
+  const images: { data: string; mediaType?: string }[] = [];
+  for (const block of blocks) {
+    if (!isJsonObject(block)) {
+      continue;
+    }
+    const type = optionalJsonString(block, "type");
+    if (type === "text") {
+      const blockText = optionalJsonString(block, "text");
+      if (blockText) {
+        text.push(blockText);
+      }
+      continue;
+    }
+    if (type === "image") {
+      const data =
+        optionalJsonString(block, "data") ??
+        optionalJsonString(block, "image") ??
+        optionalJsonString(block, "imageBase64");
+      const mediaType =
+        optionalJsonString(block, "mediaType") ?? optionalJsonString(block, "mimeType");
+      if (data) {
+        images.push({
+          data,
+          ...(mediaType ? { mediaType } : {}),
+        });
+      }
+      continue;
+    }
+    const uri = optionalJsonString(block, "uri");
+    if (uri) {
+      text.push(`Context resource: ${uri}`);
+    }
+  }
+  return {
+    text: text.join("\n\n").trim() || "Continue.",
+    images,
+  };
+}
+
+function selectAcpModelProvider(config: DaemonConfig): string {
+  const provider = config.modelProviders.find((item) => item.enabled);
+  if (!provider) {
+    throw new Error(
+      "No enabled model provider is configured. Enable an AI SDK provider before using ACP prompts.",
+    );
+  }
+  return provider.id;
+}
+
+function writeJsonRpcResult(id: JsonRpcId | undefined, result: JsonValue): void {
+  process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`);
+}
+
+function writeJsonRpcError(
+  id: JsonRpcId | undefined,
+  code: number,
+  message: string,
+  data?: JsonValue | string,
+): void {
+  process.stdout.write(
+    `${JSON.stringify({
+      jsonrpc: "2.0",
+      id: id ?? null,
+      error: {
+        code,
+        message,
+        ...(data !== undefined ? { data } : {}),
+      },
+    })}\n`,
+  );
+}
+
+function writeJsonRpcNotification(method: string, params: JsonValue): void {
+  process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", method, params })}\n`);
+}
+
+function stringifyUnknown(value: unknown): string {
+  return value instanceof Error ? value.message : String(value);
 }
 
 function startHttpServer(booted: BootedDaemon) {

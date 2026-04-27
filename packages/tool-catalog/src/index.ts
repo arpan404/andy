@@ -59,6 +59,10 @@ export const Capabilities = {
     screenshot: "browser.screenshot",
     submitForm: "browser.submit_form",
   },
+  codex: {
+    run: "codex.run",
+    thread: "codex.thread",
+  },
   background: {
     run: "background.run",
     schedule: "background.schedule",
@@ -135,6 +139,9 @@ export const Tools = {
     type: "browser.type",
     screenshot: "browser.screenshot",
     submitForm: "browser.submit_form",
+  },
+  codex: {
+    run: "codex.run",
   },
   secrets: {
     get: "secrets.get",
