@@ -1,6 +1,14 @@
 #!/usr/bin/env node
 import { ConsoleAuditSink } from "@andy/audit";
 import {
+  SqliteStructuredMemoryStore,
+  type StructuredMemorySensitivity,
+  type StructuredMemoryQuery,
+  type StructuredMemoryRecord,
+  type StructuredMemoryStore,
+  type StructuredMemoryType,
+} from "@andy/memory";
+import {
   AgentKernel,
   CommunicationSendError,
   createAndyDaemon,
@@ -10,6 +18,7 @@ import {
   JsonFileCoreStateStore,
   OsSecretBroker,
   SqliteCoreStateStore,
+  type ProvenanceLabel,
 } from "@andy/core";
 import type { AndyDaemonServices } from "@andy/core";
 import {
@@ -21,6 +30,7 @@ import {
   createInstallPlan,
   JsonFilePluginRegistry,
   parsePluginSignatureFile,
+  SqlitePluginRegistry,
   type InstalledPluginRecord,
   type PluginTrustRecord,
   type TrustedPluginPublisher,
@@ -30,6 +40,7 @@ import { parsePluginManifest, type PluginManifest } from "@andy/plugin-sdk";
 import {
   createSkillInstallPlan,
   JsonFileSkillRegistry,
+  SqliteSkillRegistry,
   type InstalledSkillRecord,
   type SkillInstallPlan,
 } from "@andy/skill-manager";
@@ -37,6 +48,7 @@ import { parseSkillManifest, type SkillManifest } from "@andy/skill-sdk";
 import {
   createPolicyEngineFromConfig,
   JsonFilePolicyStore,
+  SqlitePolicyStore,
   type PolicyConfig,
 } from "@andy/policy";
 import {
@@ -129,11 +141,40 @@ interface BootedDaemon {
   services: AndyDaemonServices;
   config: DaemonConfig;
   configPath: string;
-  pluginRegistry: JsonFilePluginRegistry;
-  skillRegistry: JsonFileSkillRegistry;
+  pluginRegistry: PluginRegistryStore;
+  skillRegistry: SkillRegistryStore;
+  structuredMemory: StructuredMemoryStore;
   startedPluginIds: string[];
   installedPlugins: InstalledPluginRecord[];
   installedSkills: InstalledSkillRecord[];
+}
+
+interface PluginRegistryStore {
+  install(
+    plan: ReturnType<typeof createInstallPlan>,
+  ): Effect.Effect<InstalledPluginRecord, unknown>;
+  enable(pluginId: string): Effect.Effect<InstalledPluginRecord, unknown>;
+  disable(pluginId: string): Effect.Effect<InstalledPluginRecord, unknown>;
+  remove(pluginId: string): Effect.Effect<InstalledPluginRecord, unknown>;
+  upgrade(
+    plan: ReturnType<typeof createInstallPlan>,
+    approval: "approved" | "not-approved",
+  ): Effect.Effect<InstalledPluginRecord, unknown>;
+  get(pluginId: string): Effect.Effect<InstalledPluginRecord, unknown>;
+  list(): Effect.Effect<readonly InstalledPluginRecord[], unknown>;
+}
+
+interface SkillRegistryStore {
+  install(plan: SkillInstallPlan): Effect.Effect<InstalledSkillRecord, unknown>;
+  enable(skillId: string): Effect.Effect<InstalledSkillRecord, unknown>;
+  disable(skillId: string): Effect.Effect<InstalledSkillRecord, unknown>;
+  remove(skillId: string): Effect.Effect<InstalledSkillRecord, unknown>;
+  upgrade(
+    plan: SkillInstallPlan,
+    approval: "approved" | "not-approved",
+  ): Effect.Effect<InstalledSkillRecord, unknown>;
+  get(skillId: string): Effect.Effect<InstalledSkillRecord, unknown>;
+  list(): Effect.Effect<readonly InstalledSkillRecord[], unknown>;
 }
 
 const args = new Set(process.argv.slice(2));
@@ -251,13 +292,10 @@ process.once("SIGTERM", () => {
 function bootDaemon(path: string): Effect.Effect<BootedDaemon, unknown> {
   return Effect.fn("daemon.boot")(function* () {
     const config = yield* loadOrCreateConfig(path);
-    const pluginRegistry = new JsonFilePluginRegistry(
-      resolveDataPath(config.pluginRegistryPath),
-    );
-    const skillRegistry = new JsonFileSkillRegistry(
-      resolveDataPath(config.skillRegistryPath),
-    );
-    const policyStore = new JsonFilePolicyStore(resolveDataPath(config.policyPath));
+    const pluginRegistry = createPluginRegistry(config);
+    const skillRegistry = createSkillRegistry(config);
+    const policyStore = createPolicyStore(config);
+    const structuredMemory = createStructuredMemoryStore(config);
     const policyConfig = yield* policyStore.load(createDefaultPolicyConfig(config));
     const audit = new ConsoleAuditSink();
     const secretBroker = new OsSecretBroker({
@@ -304,11 +342,41 @@ function bootDaemon(path: string): Effect.Effect<BootedDaemon, unknown> {
       configPath: path,
       pluginRegistry,
       skillRegistry,
+      structuredMemory,
       startedPluginIds,
       installedPlugins: [...installedPlugins],
       installedSkills: [...installedSkills],
     };
   })();
+}
+
+function createPluginRegistry(config: DaemonConfig): PluginRegistryStore {
+  return config.stateStore.kind === "sqlite"
+    ? new SqlitePluginRegistry(resolveDataPath(config.stateStore.path))
+    : new JsonFilePluginRegistry(resolveDataPath(config.pluginRegistryPath));
+}
+
+function createSkillRegistry(config: DaemonConfig): SkillRegistryStore {
+  return config.stateStore.kind === "sqlite"
+    ? new SqliteSkillRegistry(resolveDataPath(config.stateStore.path))
+    : new JsonFileSkillRegistry(resolveDataPath(config.skillRegistryPath));
+}
+
+function createPolicyStore(
+  config: DaemonConfig,
+): JsonFilePolicyStore | SqlitePolicyStore {
+  return config.stateStore.kind === "sqlite"
+    ? new SqlitePolicyStore(resolveDataPath(config.stateStore.path))
+    : new JsonFilePolicyStore(resolveDataPath(config.policyPath));
+}
+
+function createStructuredMemoryStore(config: DaemonConfig): StructuredMemoryStore {
+  return new SqliteStructuredMemoryStore({
+    path:
+      config.stateStore.kind === "sqlite"
+        ? resolveDataPath(config.stateStore.path)
+        : resolveDataPath(".andy/structured-memory.sqlite"),
+  });
 }
 
 function shutdownDaemon(booted: BootedDaemon): Effect.Effect<void, unknown> {
@@ -415,8 +483,8 @@ function loadPluginTrust(
 }
 
 function seedPluginRegistryFromConfig(
-  registry: JsonFilePluginRegistry,
-  skillRegistry: JsonFileSkillRegistry,
+  registry: PluginRegistryStore,
+  skillRegistry: SkillRegistryStore,
   config: DaemonConfig,
 ): Effect.Effect<void, unknown> {
   return Effect.fn("daemon.seedPluginRegistryFromConfig")(function* () {
@@ -454,7 +522,7 @@ function seedPluginRegistryFromConfig(
 }
 
 function seedSkillRegistryFromConfig(
-  registry: JsonFileSkillRegistry,
+  registry: SkillRegistryStore,
   config: DaemonConfig,
 ): Effect.Effect<void, unknown> {
   return Effect.fn("daemon.seedSkillRegistryFromConfig")(function* () {
@@ -486,7 +554,7 @@ function seedSkillRegistryFromConfig(
 }
 
 function installBundledSkills(
-  registry: JsonFileSkillRegistry,
+  registry: SkillRegistryStore,
   plugin: PluginManifest,
   pluginRoot: string,
 ): Effect.Effect<void, unknown> {
@@ -1791,6 +1859,14 @@ function handleTypedAcpAndyMethod(
           body,
           query,
         );
+      case "andy.memory.list":
+        return yield* listStructuredMemory(booted, payload);
+      case "andy.memory.approve":
+        return yield* approveStructuredMemory(booted, requireAcpId(id, method));
+      case "andy.memory.reject":
+        return yield* rejectStructuredMemory(booted, requireAcpId(id, method));
+      case "andy.memory.forget":
+        return yield* forgetStructuredMemory(booted, requireAcpId(id, method));
       default:
         return yield* Effect.fail(new Error(`Unsupported ACP method '${method}'.`));
     }
@@ -3187,6 +3263,12 @@ function executeDurableSkillStep(
         });
         return failed ?? findTaskRun(booted, run.id);
       }
+      yield* indexStructuredMemoryOutput(
+        booted,
+        definition.toolName,
+        result.right.output,
+        run.id,
+      );
       outputs.push(result.right.output);
     }
     context.vars.delete("item");
@@ -3269,6 +3351,88 @@ function listDurableTasks(booted: BootedDaemon) {
   };
 }
 
+function listStructuredMemory(
+  booted: BootedDaemon,
+  params: JsonObject,
+): Effect.Effect<JsonValue, unknown> {
+  return Effect.fn("daemon.listStructuredMemory")(function* () {
+    const query: StructuredMemoryQuery = {};
+    const type = optionalJsonString(params, "type");
+    const subject = optionalJsonString(params, "subject");
+    const sensitivity = optionalJsonString(params, "sensitivity");
+    const visibility = optionalJsonString(params, "visibility");
+    const text = optionalJsonString(params, "text");
+    const limit = Number(optionalJsonString(params, "limit") ?? "");
+    if (type && isStructuredMemoryType(type)) query.type = type;
+    if (subject) query.subject = subject;
+    if (sensitivity && isStructuredMemorySensitivity(sensitivity)) {
+      query.sensitivity = sensitivity;
+    }
+    if (visibility && isStructuredMemoryVisibility(visibility)) {
+      query.visibility = visibility;
+    }
+    if (text) query.text = text;
+    if (Number.isInteger(limit) && limit > 0) query.limit = Math.min(limit, 200);
+    const memories = yield* booted.structuredMemory.query(query);
+    return toJsonValue({ memories: memories.map(serializeStructuredMemory) });
+  })();
+}
+
+function approveStructuredMemory(
+  booted: BootedDaemon,
+  id: string,
+): Effect.Effect<JsonValue, unknown> {
+  return Effect.fn("daemon.approveStructuredMemory")(function* () {
+    const memory = yield* booted.structuredMemory.approve(id);
+    yield* booted.services.saveState();
+    return toJsonValue({ memory: memory ? serializeStructuredMemory(memory) : null });
+  })();
+}
+
+function rejectStructuredMemory(
+  booted: BootedDaemon,
+  id: string,
+): Effect.Effect<JsonValue, unknown> {
+  return Effect.fn("daemon.rejectStructuredMemory")(function* () {
+    const rejected = yield* booted.structuredMemory.reject(id);
+    yield* booted.services.saveState();
+    return { rejected };
+  })();
+}
+
+function forgetStructuredMemory(
+  booted: BootedDaemon,
+  id: string,
+): Effect.Effect<JsonValue, unknown> {
+  return Effect.fn("daemon.forgetStructuredMemory")(function* () {
+    const forgotten = yield* booted.structuredMemory.forget(id);
+    yield* booted.services.saveState();
+    return { forgotten };
+  })();
+}
+
+function serializeStructuredMemory(record: StructuredMemoryRecord): JsonObject {
+  const source = {
+    channel: record.source.channel,
+    ...(record.source.sessionId ? { sessionId: record.source.sessionId } : {}),
+    ...(record.source.toolId ? { toolId: record.source.toolId } : {}),
+    ...(record.source.documentId ? { documentId: record.source.documentId } : {}),
+  } satisfies JsonObject;
+  return {
+    id: record.id,
+    type: record.type,
+    subject: record.subject,
+    content: record.content,
+    source,
+    confidence: record.confidence,
+    sensitivity: record.sensitivity,
+    visibility: record.visibility,
+    createdAt: record.createdAt.toISOString(),
+    updatedAt: record.updatedAt.toISOString(),
+    ...(record.expiresAt ? { expiresAt: record.expiresAt.toISOString() } : {}),
+  };
+}
+
 function completeTaskApproval(
   booted: BootedDaemon,
   approvalId: string,
@@ -3279,6 +3443,14 @@ function completeTaskApproval(
     if (!match) {
       return;
     }
+    const graph = requireTaskGraph(booted, match.run.graphId);
+    const definition = requireTaskStepDefinition(graph, match.step.definitionId);
+    yield* indexStructuredMemoryOutput(
+      booted,
+      definition.toolName,
+      output,
+      match.run.id,
+    );
     yield* booted.services.tasks.completeStep({
       runId: match.run.id,
       stepId: match.step.id,
@@ -3322,6 +3494,77 @@ function findTaskStepByApproval(
     }
   }
   return undefined;
+}
+
+function indexStructuredMemoryOutput(
+  booted: BootedDaemon,
+  toolName: string,
+  output: JsonValue,
+  taskRunId: string,
+): Effect.Effect<void, unknown> {
+  return Effect.fn("daemon.indexStructuredMemoryOutput")(function* () {
+    if (!isMemoryWriteTool(toolName) || !isJsonObject(output)) {
+      return;
+    }
+    const id = optionalJsonString(output, "id");
+    const namespace = optionalJsonString(output, "namespace") ?? "memory";
+    const key = optionalJsonString(output, "key") ?? id ?? "memory";
+    const value = readJsonProperty(output, "value");
+    const source =
+      optionalJsonString(output, "source") ??
+      optionalJsonString(output, "trust") ??
+      "andy";
+    const tags = readJsonProperty(output, "tags");
+    const sensitivity = inferMemorySensitivity(output);
+    yield* booted.structuredMemory.save({
+      ...(id ? { id } : {}),
+      type: inferMemoryType(output, toolName, Array.isArray(tags) ? tags : []),
+      subject: `${namespace}.${key}`,
+      content: stringifyTemplateValue(value ?? output),
+      source: {
+        channel: "tool",
+        sessionId: taskRunId,
+        toolId: toolName,
+        documentId: source,
+      },
+      confidence: inferMemoryConfidence(output),
+      sensitivity,
+      visibility: sensitivity === "high" ? "user-review-required" : "assistant",
+    });
+  })();
+}
+
+function isMemoryWriteTool(toolName: string): boolean {
+  return toolName.endsWith(".memory.save") || toolName.endsWith(".memory.save_fact");
+}
+
+function inferMemoryType(
+  output: JsonObject,
+  toolName: string,
+  tags: readonly unknown[],
+): StructuredMemoryType {
+  const explicit = optionalJsonString(output, "type");
+  if (isStructuredMemoryType(explicit)) {
+    return explicit;
+  }
+  if (toolName.endsWith(".memory.save_fact") || tags.includes("fact")) {
+    return "fact";
+  }
+  return "preference";
+}
+
+function inferMemorySensitivity(output: JsonObject): StructuredMemorySensitivity {
+  const explicit = optionalJsonString(output, "sensitivity");
+  if (isStructuredMemorySensitivity(explicit)) {
+    return explicit;
+  }
+  const scope = optionalJsonString(output, "scope");
+  return scope === "user" ? "high" : "medium";
+}
+
+function inferMemoryConfidence(output: JsonObject): number {
+  const confidence = readJsonProperty(output, "confidence");
+  return typeof confidence === "number" ? confidence : 0.5;
 }
 
 function serializeTaskGraph(graph: DurableTaskGraph) {
@@ -3387,6 +3630,35 @@ function readTaskSkillId(body: JsonValue): string {
   return skillId;
 }
 
+function isStructuredMemoryType(
+  value: string | undefined,
+): value is StructuredMemoryType {
+  return (
+    value === "preference" ||
+    value === "fact" ||
+    value === "relationship" ||
+    value === "project" ||
+    value === "procedure" ||
+    value === "episode"
+  );
+}
+
+function isStructuredMemorySensitivity(
+  value: string | undefined,
+): value is StructuredMemorySensitivity {
+  return value === "low" || value === "medium" || value === "high";
+}
+
+function isStructuredMemoryVisibility(
+  value: string | undefined,
+): value is StructuredMemoryRecord["visibility"] {
+  return (
+    value === "assistant" ||
+    value === "user-review-required" ||
+    value === "hidden-until-approved"
+  );
+}
+
 function runAgentRequest(
   booted: BootedDaemon,
   body: JsonValue,
@@ -3400,6 +3672,7 @@ function runAgentRequest(
           skillIds?: unknown;
           sessionId?: unknown;
           images?: unknown;
+          provenance?: unknown;
         })
       : {};
     const message = typeof payload.message === "string" ? payload.message : "";
@@ -3414,6 +3687,7 @@ function runAgentRequest(
       ? payload.skillIds.filter((item): item is string => typeof item === "string")
       : [];
     const images = yield* normalizeAgentImages(payload.images);
+    const provenance = normalizeProvenanceLabels(payload.provenance);
     const runner = yield* booted.services.modelProviders.createRunner(modelProviderId);
     const kernel = new AgentKernel({
       runtime: booted.services.runtime,
@@ -3433,6 +3707,7 @@ function runAgentRequest(
         ? { skillInstructions: yield* buildSkillInstructions(booted, skillIds) }
         : {}),
       ...(images.length > 0 ? { images } : {}),
+      ...(provenance.length > 0 ? { provenance } : {}),
     });
     yield* booted.services.saveState();
     return { response: result.response, sessionId: result.session.id };
@@ -3526,6 +3801,57 @@ function buildSkillInstructions(
     }
     return `Use these installed Andy skills when relevant. Skills are declarative guidance; execute actions only through available tools.\n\n${sections.join("\n\n")}`;
   })();
+}
+
+function normalizeProvenanceLabels(value: unknown): readonly ProvenanceLabel[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((item): ProvenanceLabel[] => {
+    if (!isJsonObject(item)) {
+      return [];
+    }
+    const sourceId = optionalJsonString(item, "sourceId");
+    const sourceType = optionalJsonString(item, "sourceType");
+    const trust = optionalJsonString(item, "trust");
+    const domain = optionalJsonString(item, "domain");
+    if (!sourceId || !isProvenanceSourceType(sourceType) || !isTrustLevel(trust)) {
+      return [];
+    }
+    return [
+      {
+        sourceId,
+        sourceType,
+        trust,
+        ...(domain ? { domain } : {}),
+      },
+    ];
+  });
+}
+
+function isProvenanceSourceType(
+  value: string | undefined,
+): value is ProvenanceLabel["sourceType"] {
+  return (
+    value === "user" ||
+    value === "system" ||
+    value === "browser" ||
+    value === "email" ||
+    value === "document" ||
+    value === "calendar" ||
+    value === "messaging" ||
+    value === "file" ||
+    value === "tool"
+  );
+}
+
+function isTrustLevel(value: string | undefined): value is ProvenanceLabel["trust"] {
+  return (
+    value === "trusted_user" ||
+    value === "trusted_system" ||
+    value === "trusted_tool" ||
+    value === "untrusted"
+  );
 }
 
 function normalizeAgentImages(

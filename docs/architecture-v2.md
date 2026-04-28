@@ -222,6 +222,13 @@ secret_metadata
 
 Keep Markdown memory as inspectable user memory where appropriate, but use SQLite for runtime metadata and query-heavy records.
 
+Structured memory review now has a SQLite-backed foundation. Records include
+type, subject, content, provenance source, confidence, sensitivity, visibility,
+and timestamps. High-sensitivity records can be held in
+`user-review-required` visibility until the user approves them. This is still a
+review/index layer; semantic memory should index reviewed inspectable records,
+not become the only source of truth.
+
 Requirements:
 
 - migrations
@@ -289,8 +296,21 @@ Tool calls should carry:
 - risk
 - channel id
 - user id
+- provenance labels
 - cancellation token
 - timeout budget
+
+Current implementation carries provenance from `AgentRunInput` into
+`AgentSession`, and from the session into every model-requested tool call.
+Remote messaging channels default to untrusted provenance. Local ACP/user
+requests default to trusted-user provenance. Explicit provenance labels can be
+passed through typed agent-run ACP payloads.
+
+Tool output tainting is also implemented for the first slice: explicit output
+provenance labels are merged into the session, and browser/filesystem
+read/list/messaging-style outputs are inferred as untrusted when labels are
+missing. V2 still needs richer explicit labels in first-party plugin outputs and
+source-domain rules for future email/document/calendar/Slack/PDF connectors.
 
 ## Model Providers V2
 
@@ -533,7 +553,9 @@ Telegram webhook
 - Migrate sessions, messages, approvals, background jobs, events, and traces into SQLite queryable tables. Done for core state snapshots.
 - Add durable task graph/run/step snapshot tables. Done for the task engine foundation.
 - Compile skill workflow invocations into durable task graphs and task runs. Done for immediate skill runs.
-- Migrate plugin registry, skill registry, policy, memory metadata, and background task graph records into SQLite.
+- Migrate plugin registry, skill registry, and policy config into SQLite. Done for the default daemon store.
+- Migrate structured memory metadata and review state into SQLite. Done for the structured memory foundation.
+- Migrate richer background task graph query records into SQLite.
 - Keep JSON import/export.
 - Add event/session indexes and retention.
 

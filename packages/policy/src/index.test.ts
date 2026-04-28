@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import {
   createPolicyEngineFromConfig,
   JsonFilePolicyStore,
+  SqlitePolicyStore,
   type PolicyConfig,
 } from "./index.js";
 
@@ -48,6 +49,23 @@ describe("policy config", () => {
   test("persists policy config through the JSON store envelope", async () => {
     const dir = await mkdtemp(join(tmpdir(), "andy-policy-"));
     const store = new JsonFilePolicyStore(join(dir, "policy.json"));
+    const fallback: PolicyConfig = {
+      allowedCapabilities: ["memory.save"],
+      approvalRequiredCapabilities: ["memory.save"],
+      approvalRequiredRisks: ["medium"],
+    };
+
+    const loaded = await Effect.runPromise(store.load(fallback));
+    const reloaded = await Effect.runPromise(store.load({ allowedCapabilities: [] }));
+
+    expect(loaded.allowedCapabilities).toEqual(["memory.save"]);
+    expect(reloaded.approvalRequiredCapabilities).toEqual(["memory.save"]);
+    expect(reloaded.approvalRequiredRisks).toEqual(["medium"]);
+  });
+
+  test("persists policy config in SQLite", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "andy-policy-sqlite-"));
+    const store = new SqlitePolicyStore(join(dir, "andy.sqlite"));
     const fallback: PolicyConfig = {
       allowedCapabilities: ["memory.save"],
       approvalRequiredCapabilities: ["memory.save"],

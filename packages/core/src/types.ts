@@ -17,6 +17,7 @@ import type {
   SwarmLimitExceededError,
   SwarmRoleDeniedError,
 } from "./errors.js";
+import type { ProvenanceLabel } from "./provenance.js";
 
 export interface ToolExecutionResult {
   runId: string;
@@ -53,6 +54,7 @@ export interface AgentSession {
   userId?: string;
   channelId?: string;
   conversationId?: string;
+  provenance?: readonly ProvenanceLabel[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -97,6 +99,7 @@ export interface AgentRunInput {
   userId?: string;
   channelId?: string;
   conversationId?: string;
+  provenance?: readonly ProvenanceLabel[];
   maxToolCalls?: number;
   maxParallelToolCalls?: number;
   traceId?: string;

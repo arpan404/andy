@@ -2,7 +2,11 @@ import { describe, expect, test } from "bun:test";
 import realFs from "node:fs/promises";
 import path from "node:path";
 import { Effect } from "effect";
-import { InMemoryStore, MarkdownMemoryStore } from "./index.js";
+import {
+  InMemoryStore,
+  MarkdownMemoryStore,
+  SqliteStructuredMemoryStore,
+} from "./index.js";
 
 describe("InMemoryStore", () => {
   test("saves and fetches persistent memories", async () => {
@@ -125,5 +129,40 @@ describe("MarkdownMemoryStore", () => {
 
     const results = await Effect.runPromise(store.query({ text: "markdown" }));
     expect(results[0]?.key).toBe("default-memory-provider");
+  });
+});
+
+describe("SqliteStructuredMemoryStore", () => {
+  test("persists reviewable structured memory records", async () => {
+    const dir = await realFs.mkdtemp(path.join("/tmp", "andy-structured-memory-"));
+    const store = new SqliteStructuredMemoryStore({
+      path: path.join(dir, "andy.sqlite"),
+    });
+
+    const saved = await Effect.runPromise(
+      store.save({
+        type: "preference",
+        subject: "user.theme",
+        content: "User prefers compact operational UI.",
+        source: { channel: "test", sessionId: "session-1", toolId: "memory.save" },
+        confidence: 0.8,
+        sensitivity: "high",
+      }),
+    );
+    expect(saved.visibility).toBe("user-review-required");
+
+    const approved = await Effect.runPromise(store.approve(saved.id));
+    expect(approved?.visibility).toBe("assistant");
+
+    const reloaded = new SqliteStructuredMemoryStore({
+      path: path.join(dir, "andy.sqlite"),
+    });
+    const records = await Effect.runPromise(
+      reloaded.query({ visibility: "assistant", text: "compact" }),
+    );
+
+    expect(records).toHaveLength(1);
+    expect(records[0]?.subject).toBe("user.theme");
+    expect(records[0]?.source.sessionId).toBe("session-1");
   });
 });

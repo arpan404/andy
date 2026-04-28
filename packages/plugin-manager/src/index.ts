@@ -4,6 +4,7 @@ import type {
   RiskLevel,
 } from "@andy/plugin-sdk";
 import { Effect, Schema } from "effect";
+import { Database } from "bun:sqlite";
 import {
   createHash,
   createPrivateKey,
@@ -11,6 +12,7 @@ import {
   sign as nodeSign,
   verify as nodeVerify,
 } from "node:crypto";
+import { mkdirSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
@@ -458,6 +460,178 @@ export class JsonFilePluginRegistry {
       });
     })();
   }
+}
+
+export class SqlitePluginRegistry {
+  readonly #path: string;
+  readonly #delegate = new InMemoryPluginRegistry();
+  #loaded = false;
+
+  constructor(path: string) {
+    this.#path = path;
+  }
+
+  install(plan: PluginInstallPlan): Effect.Effect<InstalledPluginRecord, unknown> {
+    const self = this;
+    return Effect.fn("SqlitePluginRegistry.install")(function* () {
+      yield* self.#loadOnce();
+      const record = yield* self.#delegate.install(plan);
+      yield* self.#save();
+      return record;
+    })();
+  }
+
+  enable(pluginId: string): Effect.Effect<InstalledPluginRecord, unknown> {
+    const self = this;
+    return Effect.fn("SqlitePluginRegistry.enable")(function* () {
+      yield* self.#loadOnce();
+      const record = yield* self.#delegate.enable(pluginId);
+      yield* self.#save();
+      return record;
+    })();
+  }
+
+  disable(pluginId: string): Effect.Effect<InstalledPluginRecord, unknown> {
+    const self = this;
+    return Effect.fn("SqlitePluginRegistry.disable")(function* () {
+      yield* self.#loadOnce();
+      const record = yield* self.#delegate.disable(pluginId);
+      yield* self.#save();
+      return record;
+    })();
+  }
+
+  remove(pluginId: string): Effect.Effect<InstalledPluginRecord, unknown> {
+    const self = this;
+    return Effect.fn("SqlitePluginRegistry.remove")(function* () {
+      yield* self.#loadOnce();
+      const record = yield* self.#delegate.remove(pluginId);
+      yield* self.#save();
+      return record;
+    })();
+  }
+
+  upgrade(
+    plan: PluginInstallPlan,
+    approval: "approved" | "not-approved",
+  ): Effect.Effect<InstalledPluginRecord, unknown> {
+    const self = this;
+    return Effect.fn("SqlitePluginRegistry.upgrade")(function* () {
+      yield* self.#loadOnce();
+      const record = yield* self.#delegate.upgrade(plan, approval);
+      yield* self.#save();
+      return record;
+    })();
+  }
+
+  get(pluginId: string): Effect.Effect<InstalledPluginRecord, unknown> {
+    const self = this;
+    return Effect.fn("SqlitePluginRegistry.get")(function* () {
+      yield* self.#loadOnce();
+      return yield* self.#delegate.get(pluginId);
+    })();
+  }
+
+  list(): Effect.Effect<readonly InstalledPluginRecord[], unknown> {
+    const self = this;
+    return Effect.fn("SqlitePluginRegistry.list")(function* () {
+      yield* self.#loadOnce();
+      return yield* self.#delegate.list();
+    })();
+  }
+
+  hydrate(records: readonly InstalledPluginRecord[]): Effect.Effect<void, unknown> {
+    const self = this;
+    return Effect.fn("SqlitePluginRegistry.hydrate")(function* () {
+      self.#loaded = true;
+      yield* self.#delegate.hydrate(records);
+      yield* self.#save();
+    })();
+  }
+
+  #loadOnce(): Effect.Effect<void, unknown> {
+    const self = this;
+    return Effect.fn("SqlitePluginRegistry.loadOnce")(function* () {
+      if (self.#loaded) {
+        return;
+      }
+      const records = yield* Effect.try({
+        try: () => {
+          const database = self.#open();
+          try {
+            return database
+              .query("select record_json from plugin_registry order by plugin_id")
+              .all()
+              .flatMap((row) => parsePluginRegistryRow(row));
+          } finally {
+            database.close();
+          }
+        },
+        catch: (cause) => cause,
+      });
+      yield* self.#delegate.hydrate(records);
+      self.#loaded = true;
+    })();
+  }
+
+  #save(): Effect.Effect<void, unknown> {
+    const self = this;
+    return Effect.fn("SqlitePluginRegistry.save")(function* () {
+      const plugins = yield* self.#delegate.list();
+      yield* Effect.try({
+        try: () => {
+          const database = self.#open();
+          try {
+            const transaction = database.transaction(
+              (records: readonly InstalledPluginRecord[]) => {
+                database.query("delete from plugin_registry").run();
+                const insert = database.query(
+                  "insert into plugin_registry (plugin_id, status, record_json, updated_at) values ($plugin_id, $status, $record_json, $updated_at)",
+                );
+                for (const record of records) {
+                  insert.run({
+                    $plugin_id: record.manifest.id,
+                    $status: record.status,
+                    $record_json: JSON.stringify(record),
+                    $updated_at: record.updatedAt.toISOString(),
+                  });
+                }
+              },
+            );
+            transaction(plugins);
+          } finally {
+            database.close();
+          }
+        },
+        catch: (cause) => cause,
+      });
+    })();
+  }
+
+  #open(): Database {
+    mkdirSync(dirname(this.#path), { recursive: true });
+    const database = new Database(this.#path);
+    database.exec(`
+      create table if not exists plugin_registry (
+        plugin_id text primary key,
+        status text not null,
+        record_json text not null,
+        updated_at text not null
+      );
+    `);
+    return database;
+  }
+}
+
+function parsePluginRegistryRow(row: unknown): InstalledPluginRecord[] {
+  if (typeof row !== "object" || row === null) {
+    return [];
+  }
+  const recordJson = (row as { record_json?: unknown }).record_json;
+  if (typeof recordJson !== "string") {
+    return [];
+  }
+  return [normalizeRecordDates(JSON.parse(recordJson) as InstalledPluginRecord)];
 }
 
 function parsePluginRegistryFile(value: unknown): InstalledPluginRecord[] {

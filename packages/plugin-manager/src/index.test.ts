@@ -8,6 +8,7 @@ import {
   createInstallPlan,
   InMemoryPluginRegistry,
   JsonFilePluginRegistry,
+  SqlitePluginRegistry,
   signPluginManifest,
   verifyPluginManifestSignature,
 } from "./index.js";
@@ -188,5 +189,32 @@ describe("JsonFilePluginRegistry", () => {
     expect(JSON.parse(await readFile(path, "utf8"))).toEqual(
       expect.objectContaining({ schemaVersion: 1 }),
     );
+  });
+});
+
+describe("SqlitePluginRegistry", () => {
+  test("persists installed plugin lifecycle records in SQLite", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "andy-plugin-registry-sqlite-"));
+    const path = join(dir, "andy.sqlite");
+    const source = { type: "local" as const, path: "./plugins/example" };
+    const manifest = {
+      id: "andy.example",
+      name: "Example",
+      version: "0.1.0",
+      entry: "./dist/index.js",
+      capabilities: ["memory.save"],
+      risk: "medium" as const,
+    };
+
+    const registry = new SqlitePluginRegistry(path);
+    await Effect.runPromise(registry.install(createInstallPlan(source, manifest)));
+    await Effect.runPromise(registry.enable("andy.example"));
+
+    const reloaded = new SqlitePluginRegistry(path);
+    const [record] = await Effect.runPromise(reloaded.list());
+
+    expect(record?.manifest.id).toBe("andy.example");
+    expect(record?.status).toBe("enabled");
+    expect(record?.installedAt).toBeInstanceOf(Date);
   });
 });

@@ -7,6 +7,7 @@ import {
   createSkillInstallPlan,
   InMemorySkillRegistry,
   JsonFileSkillRegistry,
+  SqliteSkillRegistry,
 } from "./index.js";
 
 const manifest = {
@@ -59,5 +60,23 @@ describe("skill registries", () => {
     );
 
     expect(loaded[0]?.manifest.id).toBe(manifest.id);
+  });
+
+  test("persists skill records in SQLite", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "andy-skills-sqlite-"));
+    const path = join(dir, "andy.sqlite");
+    const registry = new SqliteSkillRegistry(path);
+    await Effect.runPromise(
+      registry.install(
+        createSkillInstallPlan({ type: "local", path: "skills/a" }, manifest),
+      ),
+    );
+    await Effect.runPromise(registry.enable(manifest.id));
+
+    const loaded = await Effect.runPromise(new SqliteSkillRegistry(path).list());
+
+    expect(loaded[0]?.manifest.id).toBe(manifest.id);
+    expect(loaded[0]?.status).toBe("enabled");
+    expect(loaded[0]?.installedAt).toBeInstanceOf(Date);
   });
 });

@@ -29,13 +29,13 @@ Implemented foundation:
 - Store sessions, messages, approvals, background jobs, events, traces, and snapshot domains in SQLite.
 - Wire daemon default state storage to `.andy/andy.sqlite`.
 - Keep JSON state store available as explicit fallback.
+- Store plugin registry records in SQLite by default.
+- Store skill registry records in SQLite by default.
+- Store policy config in SQLite by default.
+- Store structured memory metadata and review state in SQLite.
 
 Remaining:
 
-- Move plugin registry records from `.andy/plugins.json` to SQLite.
-- Move skill registry records from `.andy/skills.json` to SQLite.
-- Move policy rules/grants from `.andy/policy.json` to SQLite.
-- Move structured memory metadata and review state into SQLite.
 - Add import/export between JSON and SQLite for migrations.
 
 Acceptance:
@@ -198,11 +198,20 @@ Implemented foundation:
 - cross-domain action checks
 - confirmation before external side effects
 - policy rules based on provenance
+- `AgentRunInput` and `AgentSession` carry provenance labels.
+- Agent kernels pass session provenance into every model-requested tool call.
+- Remote messaging channels default to untrusted provenance.
+- Local ACP/user requests default to trusted user provenance.
+- Explicit provenance labels can be supplied to typed agent-run ACP payloads.
+- Untrusted session provenance is also summarized in the system prompt so the model sees the source boundary, while runtime policy still enforces it.
+- Tool outputs can add explicit provenance labels.
+- Browser, filesystem read/list, and messaging-style tool outputs are inferred as untrusted context when they do not provide explicit labels.
+- Inferred untrusted tool-output provenance is merged into the session before the next model step, so later write/external side-effect tool calls inherit the taint.
 
 Remaining:
 
-- Propagate provenance labels through model messages and tool outputs.
-- Label browser, email, document, calendar, file, and messaging plugin outputs.
+- Add explicit provenance labels to first-party browser, filesystem, messaging, and future email/document/calendar plugin outputs instead of relying only on tool-name inference.
+- Label future email, document, calendar, Slack, PDF, and browser page subresources with richer source domains.
 - Add richer cross-domain action rules.
 - Surface provenance in approvals and observability UI.
 - Add eval cases for prompt injection and secret exfiltration.
@@ -232,6 +241,15 @@ Required:
 
 Goal: memory records must be typed, reviewable, scoped, and deletable.
 
+Implemented foundation:
+
+- Added `SqliteStructuredMemoryStore`.
+- Records include type, subject, content, provenance source, confidence, sensitivity, visibility, and timestamps.
+- High-sensitivity saved memories default to `user-review-required`.
+- Daemon exposes typed ACP methods for memory list, approve, reject, and forget.
+- CLI exposes `andy memory list`, `andy memory approve`, `andy memory reject`, and `andy memory forget`.
+- Durable skill memory writes are indexed into structured memory after successful tool execution or approval resume.
+
 Required schema fields:
 
 - type
@@ -248,6 +266,14 @@ Acceptance:
 - User-scope memory writes can require review.
 - Users can inspect, approve, edit, and delete memory records.
 - Semantic memory indexes inspectable records instead of becoming the only source of truth.
+
+Remaining:
+
+- Add edit/update commands for existing records.
+- Hook arbitrary agent/runtime `memory.save` tool calls into structured indexing, not only durable skill task execution paths.
+- Propagate richer source labels from browser, messaging, email, files, and documents.
+- Add semantic indexing over reviewed structured memory.
+- Add web/desktop memory review UI.
 
 ### Product Connectors
 

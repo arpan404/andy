@@ -88,6 +88,8 @@ if (parsed.command === "status") {
   await runSkillCommand(parsed);
 } else if (parsed.command === "task" || parsed.command === "tasks") {
   await runTaskCommand(parsed);
+} else if (parsed.command === "memory" || parsed.command === "memories") {
+  await runMemoryCommand(parsed);
 } else if (parsed.command === "ask") {
   await runAskCommand(parsed);
 } else if (parsed.command === "voice") {
@@ -155,6 +157,29 @@ async function runTaskCommand(args: ParsedArgs): Promise<void> {
     return;
   }
   throw new Error(`Unknown task command '${action}'.`);
+}
+
+async function runMemoryCommand(args: ParsedArgs): Promise<void> {
+  const [action, id] = args.rest;
+  if (!action || action === "list") {
+    const params = new URLSearchParams();
+    if (args.limit) params.set("limit", String(args.limit));
+    if (args.eventType) params.set("type", args.eventType);
+    if (args.channel) params.set("visibility", args.channel);
+    if (args.traceId) params.set("sensitivity", args.traceId);
+    if (args.sessionId) params.set("subject", args.sessionId);
+    const query = params.toString();
+    await printDaemonJson("GET", `/memory${query ? `?${query}` : ""}`);
+    return;
+  }
+  if (action === "approve" || action === "reject" || action === "forget") {
+    if (!id) {
+      throw new Error(`Usage: andy memory ${action} <memoryId>`);
+    }
+    await printDaemonJson("POST", `/memory/${id}/${action}`);
+    return;
+  }
+  throw new Error(`Unknown memory command '${action}'.`);
 }
 
 async function runConfigCommand(args: ParsedArgs): Promise<void> {
@@ -544,6 +569,19 @@ function toTypedAcpRequest(
   }
   if (method === "GET" && pathname === "/tasks") {
     return { method: "andy.tasks.list", params };
+  }
+  if (method === "GET" && pathname === "/memory") {
+    return { method: "andy.memory.list", params: query ?? {} };
+  }
+  const memoryActionMatch = pathname.match(
+    /^\/memory\/([^/]+)\/(approve|reject|forget)$/,
+  );
+  if (method === "POST" && memoryActionMatch) {
+    const action = memoryActionMatch[2] ?? "approve";
+    return {
+      method: `andy.memory.${action}`,
+      params: { id: decodeURIComponent(memoryActionMatch[1] ?? "") },
+    };
   }
 
   throw new Error(`No typed ACP method for ${method} ${pathname}.`);
@@ -1065,6 +1103,10 @@ Usage:
   andy skill remove <skillId>
   andy skill run <skillId> [--workflow name] [--input '{"key":"value"}']
   andy task list
+  andy memory list [--limit n] [--type preference|fact|relationship|project|procedure|episode] [--channel visibility] [--trace-id sensitivity] [--session-id subject]
+  andy memory approve <memoryId>
+  andy memory reject <memoryId>
+  andy memory forget <memoryId>
   andy approval list
   andy approval approve <approvalId>
   andy approval deny <approvalId>

@@ -124,11 +124,13 @@ The desktop web bridge works like this:
 ```text
 browser UI
   -> POST /acp to desktop web server
-  -> desktop process spawns andy-daemon --acp
+  -> desktop process multiplexes over persistent daemon ACP socket/pipe
   -> daemon handles request through ACP
   -> response returns to browser
 ```
 
+The desktop bridge keeps a reusable ACP client connection when the daemon is up.
+It may fall back to one-shot stdio ACP only for development or recovery paths.
 The browser still uses HTTP to load static assets and post to the desktop bridge because browsers cannot speak stdio. The browser does not call daemon HTTP.
 
 ### Web
@@ -195,6 +197,67 @@ The current executor runs ready skill steps immediately in the daemon process an
 persists after each step. Approval-gated tool calls move the step into
 `waiting_approval`. Broader cron/event/webhook dispatch and compensation
 execution remain v2 follow-up work.
+
+## SQLite Runtime Store
+
+Fresh daemon homes use `.andy/andy.sqlite` for runtime state by default.
+
+SQLite-backed records now include:
+
+- sessions and session messages
+- approvals and parked approval actions
+- background jobs
+- events and traces
+- durable task graphs, runs, and steps
+- plugin registry records
+- skill registry records
+- policy config
+- structured memory review records
+
+JSON remains available only as an explicit fallback for development or migration
+compatibility. Simple daemon configuration still lives in `.andy/daemon.json`.
+
+## Structured Memory Review
+
+Structured memory is a reviewable index over memory tool writes. It is not a
+replacement for inspectable Markdown memory or future semantic indexes.
+
+Records contain:
+
+- type: `preference`, `fact`, `relationship`, `project`, `procedure`, or `episode`
+- subject
+- content
+- provenance source: channel, session/task run id, tool id, and optional document id
+- confidence
+- sensitivity
+- visibility
+- created, updated, and optional expiry timestamps
+
+High-sensitivity records default to `user-review-required`. Approved records
+move to `assistant` visibility. Rejected or forgotten records are removed from
+the structured memory index.
+
+Local clients use typed ACP methods:
+
+```text
+andy.memory.list
+andy.memory.approve
+andy.memory.reject
+andy.memory.forget
+```
+
+The CLI exposes those through:
+
+```bash
+andy memory list
+andy memory approve <memoryId>
+andy memory reject <memoryId>
+andy memory forget <memoryId>
+```
+
+Current limitation: structured indexing is wired for durable skill task memory
+writes and approval-resume paths. Arbitrary direct agent tool calls to
+`memory.save` still need a runtime-level indexing hook.
 
 ## Core Layer
 
@@ -269,6 +332,45 @@ andy.codex.codex.run
 ```
 
 Local aliases are allowed only when unambiguous.
+
+## Provenance And Prompt-Injection Defense
+
+Agent runs and sessions carry provenance labels that describe where the current
+instructions or context came from:
+
+- source id
+- source type: user, system, browser, email, document, calendar, messaging,
+  file, or tool
+- trust level
+- optional domain
+
+Local ACP/user requests default to trusted user provenance. Remote messaging
+channels default to untrusted messaging provenance. Typed agent-run ACP payloads
+may provide explicit provenance labels for browser, file, email, document, or
+other external content.
+
+The agent kernel passes session provenance into every model-requested tool call.
+The runtime then applies provenance policy:
+
+- untrusted provenance cannot request secret access
+- untrusted provenance combined with external writes or side effects requires
+  explicit approval
+- trusted local requests continue through normal capability policy
+
+The kernel also adds a short source-boundary instruction to the model context
+when untrusted provenance is present. That instruction is advisory; the security
+boundary is still runtime policy and approval enforcement.
+
+Tool results can also taint the session. If a tool output contains explicit
+provenance labels, the kernel merges them into the session before the next model
+step. When explicit labels are absent, the kernel infers untrusted provenance for
+browser, filesystem read/list, and messaging-style tool outputs. Later tool
+calls inherit that taint and are denied or approval-gated by runtime policy when
+they attempt secrets, writes, or external side effects.
+
+Current limitation: explicit labels still need to be added to more first-party
+plugin outputs, and future email/document/calendar/Slack/PDF connectors need
+richer source-domain labeling than the current tool-name inference.
 
 ## Plugin Architecture
 
