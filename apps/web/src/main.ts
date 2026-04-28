@@ -1,4 +1,3 @@
-const daemonUrl = document.querySelector<HTMLInputElement>("#daemonUrl");
 const refresh = document.querySelector<HTMLButtonElement>("#refresh");
 const runSkill = document.querySelector<HTMLButtonElement>("#runSkill");
 const askAgent = document.querySelector<HTMLButtonElement>("#askAgent");
@@ -98,10 +97,22 @@ interface DaemonStatus extends Record<string, unknown> {
 }
 
 async function request(path: string, init?: RequestInit): Promise<DaemonStatus> {
-  const base = daemonUrl?.value || "http://127.0.0.1:8765";
-  const response = await fetch(`${base}${path}`, {
-    ...init,
-    headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
+  const [pathname, queryString] = path.split("?", 2);
+  const body =
+    typeof init?.body === "string" && init.body.trim().length > 0
+      ? (JSON.parse(init.body) as unknown)
+      : undefined;
+  const response = await fetch("/acp", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      method: init?.method ?? "GET",
+      path: pathname ?? path,
+      ...(queryString
+        ? { query: Object.fromEntries(new URLSearchParams(queryString)) }
+        : {}),
+      ...(body !== undefined ? { body } : {}),
+    }),
   });
   return (await response.json()) as DaemonStatus;
 }

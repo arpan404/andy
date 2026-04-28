@@ -104,7 +104,7 @@ The daemon exposes:
 - `POST /skills/:id/disable`
 - `POST /skills/:id/remove`
 - `POST /skills/:id/run`
-- `POST /agent/run` with `skillIds` for skill context injection into agent planning
+- ACP path `POST /agent/run` with `skillIds` for skill context injection into agent planning
 
 The CLI exposes the same surface:
 

@@ -2,12 +2,12 @@
 
 Andy ships a lightweight desktop controller binary as `andy-desktop`.
 
-The desktop controller is an app surface, not a product capability provider. It starts and stops local Andy processes and opens the web console, but it does not bypass plugins, policy, approvals, audit, or daemon APIs.
+The desktop controller is an app surface, not a product capability provider. It starts and stops local Andy processes, hosts the web console, and bridges browser requests to daemon ACP stdio. It does not bypass plugins, policy, approvals, audit, or daemon APIs.
 
 ## Responsibilities
 
 - Start the packaged daemon with `ANDY_HOME`.
-- Start a local static web-console process.
+- Start a local web-console process with an ACP bridge.
 - Open the web console in the default browser.
 - Report daemon and web process status.
 - Stop or restart managed processes.
@@ -26,7 +26,6 @@ Options:
 
 - `--home <path>` chooses the Andy home directory.
 - `--web-port <port>` chooses the local web console port. Default: `8790`.
-- `--daemon-url <url>` records the daemon URL used by the console. Default: `http://127.0.0.1:8765`.
 - `--no-open` starts processes without opening the browser.
 
 ## Runtime Layout
@@ -65,7 +64,7 @@ $ANDY_HOME/.andy/logs/web.log
 The desktop controller is only a local launcher and web-console host. Feature actions still flow through:
 
 ```text
-web console -> daemon HTTP API -> policy/approval/audit -> plugin runtime
+web console -> desktop ACP bridge -> daemon --acp -> policy/approval/audit -> plugin runtime
 ```
 
 The controller must not implement filesystem, shell, computer-control, messaging, memory, voice, or vision behavior directly.

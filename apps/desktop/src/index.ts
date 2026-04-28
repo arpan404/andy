@@ -3,7 +3,8 @@ import { Effect } from "effect";
 import { spawn } from "node:child_process";
 import { existsSync, openSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { createServer } from "node:http";
+import { createServer, type IncomingMessage } from "node:http";
+import { createConnection, type Socket } from "node:net";
 import { homedir, platform } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,7 +14,7 @@ const sourceDir = dirname(fileURLToPath(import.meta.url));
 interface DesktopState {
   daemonPid?: number;
   webPid?: number;
-  daemonUrl: string;
+  acpTransport: "socket" | "stdio";
   webUrl: string;
   home: string;
   startedAt: string;
@@ -23,7 +24,6 @@ interface ParsedArgs {
   command: string;
   rest: readonly string[];
   home?: string;
-  daemonUrl: string;
   webPort: number;
   open: boolean;
 }
@@ -43,6 +43,117 @@ interface RuntimeLayout {
     args: readonly string[];
     cwd: string;
   };
+}
+
+class PersistentAcpClient {
+  private socket: Socket | undefined;
+  private buffer = "";
+  private nextId = 1;
+  private readonly pending = new Map<
+    number,
+    {
+      resolve: (value: { connected: true; result: unknown }) => void;
+      reject: (error: unknown) => void;
+    }
+  >();
+  private connecting: Promise<boolean> | undefined;
+
+  constructor(private readonly socketPath: string) {}
+
+  async request(
+    request: Omit<Record<string, unknown>, "id">,
+  ): Promise<{ connected: true; result: unknown } | { connected: false }> {
+    const connected = await this.connect();
+    if (!connected || !this.socket) {
+      return { connected: false };
+    }
+    const id = this.nextId++;
+    return await new Promise((resolveRequest, reject) => {
+      this.pending.set(id, { resolve: resolveRequest, reject });
+      this.socket?.write(`${JSON.stringify({ ...request, id })}\n`);
+    });
+  }
+
+  private async connect(): Promise<boolean> {
+    if (this.socket && !this.socket.destroyed) {
+      return true;
+    }
+    if (platform() !== "win32" && !existsSync(this.socketPath)) {
+      return false;
+    }
+    if (this.connecting) {
+      return await this.connecting;
+    }
+    this.connecting = new Promise((resolveConnect) => {
+      const socket = createConnection(this.socketPath);
+      const fail = () => {
+        socket.destroy();
+        this.socket = undefined;
+        this.rejectPending(new Error("ACP socket disconnected."));
+        resolveConnect(false);
+      };
+      socket.once("connect", () => {
+        this.socket = socket;
+        this.connecting = undefined;
+        socket.on("data", (chunk: Buffer) => {
+          this.handleData(chunk);
+        });
+        socket.once("error", fail);
+        socket.once("end", fail);
+        socket.once("close", () => {
+          if (this.socket === socket) {
+            this.socket = undefined;
+          }
+        });
+        resolveConnect(true);
+      });
+      socket.once("error", () => {
+        this.connecting = undefined;
+        fail();
+      });
+    });
+    return await this.connecting;
+  }
+
+  private handleData(chunk: Buffer): void {
+    this.buffer += chunk.toString("utf8");
+    const lines = this.buffer.split("\n");
+    this.buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        continue;
+      }
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (!isRecord(parsed)) {
+        continue;
+      }
+      const { id, error, result } = parsed;
+      if (typeof id !== "number") {
+        continue;
+      }
+      const pending = this.pending.get(id);
+      if (!pending) {
+        continue;
+      }
+      this.pending.delete(id);
+      if (isRecord(error)) {
+        const { message } = error;
+        pending.reject(
+          new Error(typeof message === "string" ? message : JSON.stringify(error)),
+        );
+        continue;
+      }
+      pending.resolve({ connected: true, result: result ?? {} });
+    }
+  }
+
+  private rejectPending(error: Error): void {
+    for (const pending of this.pending.values()) {
+      pending.reject(error);
+    }
+    this.pending.clear();
+  }
 }
 
 const parsed = parseArgs(process.argv.slice(2));
@@ -86,7 +197,7 @@ function startDesktop(args: ParsedArgs): Effect.Effect<void, unknown> {
       yield* printJson({
         status: "running",
         home,
-        daemonUrl: existing.daemonUrl,
+        acpTransport: existing.acpTransport ?? "socket",
         webUrl: existing.webUrl,
         daemonPid: existing.daemonPid,
         webPid: existing.webPid,
@@ -121,7 +232,7 @@ function startDesktop(args: ParsedArgs): Effect.Effect<void, unknown> {
     const state: DesktopState = {
       daemonPid: daemon.pid,
       webPid: web.pid,
-      daemonUrl: args.daemonUrl,
+      acpTransport: "socket",
       webUrl: `http://127.0.0.1:${String(args.webPort)}`,
       home,
       startedAt: new Date().toISOString(),
@@ -163,7 +274,7 @@ function printStatus(args: ParsedArgs): Effect.Effect<void, unknown> {
           ? "running"
           : "stopped",
       home,
-      daemonUrl: state?.daemonUrl ?? args.daemonUrl,
+      acpTransport: state?.acpTransport ?? "stdio",
       webUrl: state?.webUrl ?? `http://127.0.0.1:${String(args.webPort)}`,
       daemonPid: state?.daemonPid ?? null,
       webPid: state?.webPid ?? null,
@@ -183,6 +294,8 @@ function openConsole(args: ParsedArgs): Effect.Effect<void, unknown> {
 function serveWeb(args: ParsedArgs): Effect.Effect<void, unknown> {
   return Effect.fn("desktop.serveWeb")(function* () {
     const layout = yield* detectRuntimeLayout();
+    const home = resolveHome(args.home);
+    const acpClient = new PersistentAcpClient(getAcpSocketPath(home));
     if (!existsSync(layout.webRoot)) {
       return yield* Effect.fail(
         new Error(
@@ -197,6 +310,27 @@ function serveWeb(args: ParsedArgs): Effect.Effect<void, unknown> {
             request.url ?? "/",
             `http://127.0.0.1:${String(args.webPort)}`,
           );
+          if (url.pathname === "/acp") {
+            if (request.method !== "POST") {
+              response.writeHead(405, { "content-type": "application/json" });
+              response.end(JSON.stringify({ error: "method_not_allowed" }));
+              return;
+            }
+            try {
+              const body = await readRequestBody(request);
+              const result = await runAcpBridge(layout, home, body, acpClient);
+              response.writeHead(200, { "content-type": "application/json" });
+              response.end(JSON.stringify(result));
+            } catch (cause) {
+              response.writeHead(500, { "content-type": "application/json" });
+              response.end(
+                JSON.stringify({
+                  error: cause instanceof Error ? cause.message : String(cause),
+                }),
+              );
+            }
+            return;
+          }
           const relativePath =
             url.pathname === "/" ? "index.html" : url.pathname.slice(1);
           const file = resolve(layout.webRoot, relativePath);
@@ -309,6 +443,210 @@ function openUrl(url: string): Effect.Effect<void, unknown> {
   });
 }
 
+async function readRequestBody(request: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  const raw = Buffer.concat(chunks).toString("utf8").trim();
+  return raw.length > 0 ? JSON.parse(raw) : {};
+}
+
+async function runAcpBridge(
+  layout: RuntimeLayout,
+  home: string,
+  request: unknown,
+  acpClient?: PersistentAcpClient,
+): Promise<unknown> {
+  const payload = isRecord(request) ? request : {};
+  const { method: methodValue, path: pathValue, query: queryValue, body } = payload;
+  const method = typeof methodValue === "string" ? methodValue : "GET";
+  const path = typeof pathValue === "string" ? pathValue : "";
+  if (!path) {
+    throw new Error("ACP bridge path is required.");
+  }
+  const query = isRecord(queryValue) ? queryValue : undefined;
+  const acpPayload = `${JSON.stringify({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "andy/request",
+    params: {
+      method,
+      path,
+      ...(query ? { query } : {}),
+      ...(body !== undefined ? { body } : {}),
+    },
+  })}\n`;
+  if (acpClient) {
+    const persistentResult = await acpClient.request({
+      jsonrpc: "2.0",
+      method: "andy/request",
+      params: {
+        method,
+        path,
+        ...(query ? { query } : {}),
+        ...(body !== undefined ? { body } : {}),
+      },
+    });
+    if (persistentResult.connected) {
+      return persistentResult.result;
+    }
+  } else {
+    const socketResult = await tryAcpSocketRequest(
+      getAcpSocketPath(home),
+      acpPayload,
+      1,
+    );
+    if (socketResult.connected) {
+      return socketResult.result;
+    }
+  }
+  const result = await spawnAndCollect(
+    layout.daemonCommand.command,
+    [...layout.daemonCommand.args, "--acp"],
+    {
+      cwd: layout.daemonCommand.cwd,
+      env: { ...process.env, ANDY_HOME: home },
+      stdin: acpPayload,
+    },
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr || `andy-daemon --acp exited ${result.exitCode}`);
+  }
+  const response = result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as unknown)
+    .find((item) => {
+      if (!isRecord(item)) {
+        return false;
+      }
+      const { jsonrpc, id } = item;
+      return jsonrpc === "2.0" && id === 1;
+    });
+  if (!isRecord(response)) {
+    throw new Error("ACP bridge did not receive a daemon response.");
+  }
+  const { error, result: responseResult } = response;
+  if (isRecord(error)) {
+    const { message } = error;
+    throw new Error(typeof message === "string" ? message : JSON.stringify(error));
+  }
+  return responseResult ?? {};
+}
+
+function getAcpSocketPath(home: string): string {
+  if (platform() === "win32") {
+    return `\\\\.\\pipe\\andy-${home.replace(/[^a-zA-Z0-9_.-]/g, "_")}`;
+  }
+  return join(home, ".andy", "andy.sock");
+}
+
+async function tryAcpSocketRequest(
+  socketPath: string,
+  payload: string,
+  id: number,
+): Promise<{ connected: true; result: unknown } | { connected: false }> {
+  if (platform() !== "win32" && !existsSync(socketPath)) {
+    return { connected: false };
+  }
+  return await new Promise((resolveRequest, reject) => {
+    const socket = createConnection(socketPath);
+    let buffer = "";
+    let settled = false;
+    socket.once("error", (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT" || error.code === "ECONNREFUSED") {
+        if (!settled) {
+          settled = true;
+          resolveRequest({ connected: false });
+        }
+        return;
+      }
+      if (!settled) {
+        settled = true;
+        reject(error);
+      }
+    });
+    socket.on("data", (chunk: Buffer) => {
+      buffer += chunk.toString("utf8");
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) {
+          continue;
+        }
+        const parsed = JSON.parse(trimmed) as unknown;
+        if (!isRecord(parsed)) {
+          continue;
+        }
+        const { id: responseId, error, result } = parsed;
+        if (responseId !== id) {
+          continue;
+        }
+        if (isRecord(error)) {
+          const { message } = error;
+          settled = true;
+          socket.end();
+          reject(
+            new Error(typeof message === "string" ? message : JSON.stringify(error)),
+          );
+          return;
+        }
+        settled = true;
+        socket.end();
+        resolveRequest({ connected: true, result: result ?? {} });
+        return;
+      }
+    });
+    socket.once("connect", () => {
+      socket.write(payload);
+    });
+    socket.once("end", () => {
+      if (!settled) {
+        settled = true;
+        reject(new Error("ACP socket closed before returning a response."));
+      }
+    });
+  });
+}
+
+async function spawnAndCollect(
+  command: string,
+  args: readonly string[],
+  options: {
+    cwd: string;
+    env: NodeJS.ProcessEnv;
+    stdin: string;
+  },
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  return await new Promise((resolveResult, reject) => {
+    const child = spawn(command, [...args], {
+      cwd: options.cwd,
+      env: options.env,
+      shell: false,
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.once("error", reject);
+    child.once("exit", (code) => {
+      resolveResult({ exitCode: code ?? 1, stdout, stderr });
+    });
+    child.stdin.end(options.stdin);
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function readDesktopState(
   path: string,
 ): Effect.Effect<DesktopState | undefined, unknown> {
@@ -341,7 +679,6 @@ function writeText(path: string, content: string): Effect.Effect<void, unknown> 
 function parseArgs(input: readonly string[]): ParsedArgs {
   const rest: string[] = [];
   let home: string | undefined;
-  let daemonUrl = "http://127.0.0.1:8765";
   let webPort = 8790;
   let open = true;
   for (let index = 0; index < input.length; index += 1) {
@@ -350,13 +687,6 @@ function parseArgs(input: readonly string[]): ParsedArgs {
       const value = input[index + 1];
       if (!value) throw new Error("--home requires a value.");
       home = value;
-      index += 1;
-      continue;
-    }
-    if (item === "--daemon-url") {
-      const value = input[index + 1];
-      if (!value) throw new Error("--daemon-url requires a value.");
-      daemonUrl = value;
       index += 1;
       continue;
     }
@@ -379,7 +709,6 @@ function parseArgs(input: readonly string[]): ParsedArgs {
     command: rest[0] ?? "start",
     rest: rest.slice(1),
     ...(home ? { home } : {}),
-    daemonUrl,
     webPort,
     open,
   };

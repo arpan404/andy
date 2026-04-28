@@ -1,16 +1,26 @@
 # Agent Client Protocol
 
-Andy supports an ACP-style stdio transport for agent-client communication through the daemon:
+Andy supports an ACP-style transport for agent-client communication through the daemon.
+
+Normal long-running daemon mode opens a persistent local ACP listener:
+
+```text
+$ANDY_HOME/.andy/andy.sock
+```
+
+On Windows this becomes a named pipe under `\\.\pipe\`.
+
+The daemon also keeps stdio ACP mode for IDE/app-server embedding and one-shot development fallback:
 
 ```bash
 andy-daemon --acp
 ```
 
-This mode is intended for IDEs, desktop controllers, and other clients that need a bidirectional session protocol without using Andy's local HTTP API.
+Local clients should prefer the persistent socket/pipe. Stdio mode is intended for IDEs, app-server style embedding, and fallback when no long-lived daemon is running.
 
 ## Scope
 
-The ACP mode is a JSONL stdio server. Each request or notification is one JSON object per line. Andy currently accepts JSON-RPC 2.0-shaped messages:
+Both ACP transports use JSONL. Each request or notification is one JSON object per line. Andy currently accepts JSON-RPC 2.0-shaped messages:
 
 ```json
 {
@@ -64,7 +74,35 @@ ACP prompts can include image blocks. Andy forwards image blocks to the AI SDK r
 
 ACP is the preferred protocol for agent-client communication.
 
-The HTTP server still exists for local web console/admin operations, messaging webhooks, approvals, and transitional tooling. It should not grow into the primary agent-client protocol. New agent-client integrations should use ACP unless they specifically need a webhook or browser-based local admin surface.
+The Andy CLI now uses ACP instead of HTTP. CLI commands first try the persistent daemon socket/pipe. If no daemon is running, they fall back to spawning the sibling `andy-daemon --acp` for one-shot commands.
+
+The desktop-hosted web console now uses an ACP bridge. Browser JavaScript posts to the local desktop web server, and that server forwards the operation to the persistent daemon ACP socket/pipe. If no daemon is running, the bridge can fall back to one-shot stdio ACP. The browser does not call the daemon HTTP API.
+
+The daemon HTTP server still exists for health checks and external messaging webhooks. New local agent-client integrations should use ACP unless they specifically need to receive an external platform webhook.
+
+## CLI Admin Bridge
+
+Most CLI and web-console management commands use the ACP method:
+
+```text
+andy/request
+```
+
+This is an Andy-specific ACP extension that carries a daemon operation as structured params:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "andy/request",
+  "params": {
+    "method": "GET",
+    "path": "/plugins"
+  }
+}
+```
+
+The daemon handles this through internal operation functions, not by making an HTTP request to itself.
 
 ## Validation
 

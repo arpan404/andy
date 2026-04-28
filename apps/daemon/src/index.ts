@@ -43,11 +43,17 @@ import {
 } from "@andy/types";
 import { Effect } from "effect";
 import { execFile } from "node:child_process";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import {
+  createServer as createHttpServer,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { platform } from "node:os";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { createInterface } from "node:readline";
+import { createServer as createNetServer, type Socket } from "node:net";
 
 interface DaemonConfig {
   statePath: string;
@@ -158,6 +164,7 @@ if (args.has("--acp")) {
   process.exit(0);
 }
 
+const acpSocketServer = await startAcpSocketServer(booted);
 const httpServer = booted.config.http.enabled ? startHttpServer(booted) : undefined;
 
 console.log(
@@ -169,6 +176,7 @@ console.log(
     http: booted.config.http.enabled
       ? `${booted.config.http.host}:${booted.config.http.port}`
       : "disabled",
+    acpSocketPath: getAcpSocketPath(),
   }),
 );
 
@@ -207,6 +215,18 @@ const stop = async () => {
   if (httpServer) {
     await new Promise<void>((resolveClose) => httpServer.close(() => resolveClose()));
   }
+  await new Promise<void>((resolveClose) =>
+    acpSocketServer.close(() => resolveClose()),
+  );
+  await Effect.runPromise(
+    Effect.tryPromise({
+      try: () =>
+        platform() === "win32"
+          ? Promise.resolve()
+          : rm(getAcpSocketPath(), { force: true }),
+      catch: (cause) => cause,
+    }).pipe(Effect.ignore),
+  );
   await Effect.runPromise(shutdownDaemon(booted));
   process.exit(0);
 };
@@ -551,6 +571,14 @@ function resolveAssetPath(path: string): string {
 
 function resolveDataPath(path: string): string {
   return isAbsolute(path) ? path : resolve(dataRoot, path);
+}
+
+function getAcpSocketPath(): string {
+  if (platform() === "win32") {
+    const name = dataRoot.replace(/[^a-zA-Z0-9_.-]/g, "_");
+    return `\\\\.\\pipe\\andy-${name}`;
+  }
+  return resolveDataPath(".andy/andy.sock");
 }
 
 function findWorkspaceRoot(start: string): string | undefined {
@@ -1334,6 +1362,7 @@ function registerMessagingChannels(
 }
 
 type JsonRpcId = string | number | null;
+type JsonRpcWriter = (message: JsonValue) => void;
 
 interface JsonRpcRequest {
   jsonrpc?: "2.0";
@@ -1354,56 +1383,105 @@ async function runAcpStdioServer(booted: BootedDaemon): Promise<void> {
     input: process.stdin,
     crlfDelay: Number.POSITIVE_INFINITY,
   });
+  const write: JsonRpcWriter = (message) => {
+    process.stdout.write(`${JSON.stringify(message)}\n`);
+  };
 
   for await (const line of lines) {
-    if (!line.trim()) {
-      continue;
-    }
+    await handleAcpLine(booted, sessions, line, write);
+  }
+}
 
-    let message: JsonRpcRequest;
-    try {
-      const parsed: unknown = JSON.parse(line);
-      message = isJsonObject(parsed) ? (parsed as JsonRpcRequest) : {};
-    } catch (cause) {
-      writeJsonRpcError(null, -32700, "Parse error", stringifyUnknown(cause));
-      continue;
-    }
+async function startAcpSocketServer(booted: BootedDaemon) {
+  const socketPath = getAcpSocketPath();
+  if (platform() !== "win32") {
+    await mkdir(dirname(socketPath), { recursive: true });
+    await rm(socketPath, { force: true });
+  }
+  const sessions = new Map<string, AcpSessionState>();
+  const server = createNetServer((socket) => {
+    void handleAcpSocket(booted, sessions, socket);
+  });
+  await new Promise<void>((resolveListen, reject) => {
+    server.once("error", reject);
+    server.listen(socketPath, () => {
+      server.off("error", reject);
+      resolveListen();
+    });
+  });
+  return server;
+}
 
-    if (typeof message.method !== "string") {
-      if (message.id !== undefined) {
-        writeJsonRpcError(message.id, -32600, "Invalid Request");
-      }
-      continue;
-    }
+async function handleAcpSocket(
+  booted: BootedDaemon,
+  sessions: Map<string, AcpSessionState>,
+  socket: Socket,
+): Promise<void> {
+  const lines = createInterface({
+    input: socket,
+    crlfDelay: Number.POSITIVE_INFINITY,
+  });
+  const write: JsonRpcWriter = (message) => {
+    socket.write(`${JSON.stringify(message)}\n`);
+  };
+  for await (const line of lines) {
+    await handleAcpLine(booted, sessions, line, write);
+  }
+}
 
-    if (message.id === undefined) {
-      await Effect.runPromise(
-        handleAcpNotification(booted, sessions, message).pipe(
-          Effect.catchAll((cause) =>
-            Effect.sync(() =>
-              console.error(
-                JSON.stringify({
-                  ts: new Date().toISOString(),
-                  transport: "acp",
-                  error: stringifyUnknown(cause),
-                }),
-              ),
+async function handleAcpLine(
+  booted: BootedDaemon,
+  sessions: Map<string, AcpSessionState>,
+  line: string,
+  write: JsonRpcWriter,
+): Promise<void> {
+  if (!line.trim()) {
+    return;
+  }
+
+  let message: JsonRpcRequest;
+  try {
+    const parsed: unknown = JSON.parse(line);
+    message = isJsonObject(parsed) ? (parsed as JsonRpcRequest) : {};
+  } catch (cause) {
+    write(jsonRpcError(null, -32700, "Parse error", stringifyUnknown(cause)));
+    return;
+  }
+
+  if (typeof message.method !== "string") {
+    if (message.id !== undefined) {
+      write(jsonRpcError(message.id, -32600, "Invalid Request"));
+    }
+    return;
+  }
+
+  if (message.id === undefined) {
+    await Effect.runPromise(
+      handleAcpNotification(booted, sessions, message).pipe(
+        Effect.catchAll((cause) =>
+          Effect.sync(() =>
+            console.error(
+              JSON.stringify({
+                ts: new Date().toISOString(),
+                transport: "acp",
+                error: stringifyUnknown(cause),
+              }),
             ),
           ),
         ),
-      );
-      continue;
-    }
-
-    const result = await Effect.runPromise(
-      handleAcpRequest(booted, sessions, message).pipe(Effect.either),
+      ),
     );
-    if (result._tag === "Left") {
-      writeJsonRpcError(message.id, -32000, stringifyUnknown(result.left));
-      continue;
-    }
-    writeJsonRpcResult(message.id, result.right);
+    return;
   }
+
+  const result = await Effect.runPromise(
+    handleAcpRequest(booted, sessions, message, write).pipe(Effect.either),
+  );
+  if (result._tag === "Left") {
+    write(jsonRpcError(message.id, -32000, stringifyUnknown(result.left)));
+    return;
+  }
+  write(jsonRpcResult(message.id, result.right));
 }
 
 function handleAcpNotification(
@@ -1435,6 +1513,7 @@ function handleAcpRequest(
   booted: BootedDaemon,
   sessions: Map<string, AcpSessionState>,
   message: JsonRpcRequest,
+  write: JsonRpcWriter,
 ): Effect.Effect<JsonValue, unknown> {
   return Effect.fn("daemon.acp.request")(function* () {
     switch (message.method) {
@@ -1450,7 +1529,9 @@ function handleAcpRequest(
       case "session/close":
         return yield* closeAcpSession(booted, sessions, message.params);
       case "session/prompt":
-        return yield* promptAcpSession(booted, sessions, message.params);
+        return yield* promptAcpSession(booted, sessions, message.params, write);
+      case "andy/request":
+        return yield* handleAcpAndyRequest(booted, message.params);
       default:
         return yield* Effect.fail(
           new Error(`Unsupported ACP method '${message.method}'.`),
@@ -1488,6 +1569,37 @@ function createAcpInitializeResponse(params: unknown): JsonValue {
     },
     authMethods: [],
   };
+}
+
+function handleAcpAndyRequest(
+  booted: BootedDaemon,
+  params: unknown,
+): Effect.Effect<JsonValue, unknown> {
+  return Effect.fn("daemon.acp.andyRequest")(function* () {
+    const payload = isJsonObject(params) ? params : {};
+    const method = optionalJsonString(payload, "method") ?? "GET";
+    const path = optionalJsonString(payload, "path");
+    if (!path) {
+      return yield* Effect.fail(new Error("ACP andy/request path is required."));
+    }
+    const queryValue = readJsonProperty(payload, "query");
+    const body = readJsonProperty(payload, "body");
+    const query: Record<string, string> = {};
+    if (isJsonObject(queryValue)) {
+      for (const [key, value] of Object.entries(queryValue)) {
+        if (typeof value === "string") {
+          query[key] = value;
+        }
+      }
+    }
+    const result = yield* handleDaemonApiRequest(booted, {
+      method,
+      path,
+      query,
+      ...(body !== undefined ? { body } : {}),
+    });
+    return toJsonValue(result);
+  })();
 }
 
 function createAcpSession(
@@ -1571,6 +1683,7 @@ function promptAcpSession(
   booted: BootedDaemon,
   sessions: Map<string, AcpSessionState>,
   params: unknown,
+  write: JsonRpcWriter,
 ): Effect.Effect<JsonValue, unknown> {
   return Effect.fn("daemon.acp.sessionPrompt")(function* () {
     const payload = isJsonObject(params) ? params : {};
@@ -1617,16 +1730,18 @@ function promptAcpSession(
       }
       return yield* Effect.fail(result.left);
     }
-    writeJsonRpcNotification("session/update", {
-      sessionId,
-      update: {
-        sessionUpdate: "agent_message_chunk",
-        content: {
-          type: "text",
-          text: result.right.response,
+    write(
+      jsonRpcNotification("session/update", {
+        sessionId,
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: {
+            type: "text",
+            text: result.right.response,
+          },
         },
-      },
-    });
+      }),
+    );
     return { stopReason: "end_turn" };
   })();
 }
@@ -1686,31 +1801,38 @@ function selectAcpModelProvider(config: DaemonConfig): string {
   return provider.id;
 }
 
-function writeJsonRpcResult(id: JsonRpcId | undefined, result: JsonValue): void {
-  process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`);
+function jsonRpcResult(id: JsonRpcId | undefined, result: JsonValue): JsonValue {
+  return {
+    jsonrpc: "2.0",
+    ...(id !== undefined ? { id } : {}),
+    result,
+  };
 }
 
-function writeJsonRpcError(
+function jsonRpcError(
   id: JsonRpcId | undefined,
   code: number,
   message: string,
   data?: JsonValue | string,
-): void {
-  process.stdout.write(
-    `${JSON.stringify({
-      jsonrpc: "2.0",
-      id: id ?? null,
-      error: {
-        code,
-        message,
-        ...(data !== undefined ? { data } : {}),
-      },
-    })}\n`,
-  );
+): JsonValue {
+  return {
+    jsonrpc: "2.0",
+    id: id ?? null,
+    error: {
+      code,
+      message,
+      ...(data !== undefined ? { data } : {}),
+    },
+  };
 }
 
-function writeJsonRpcNotification(method: string, params: JsonValue): void {
-  process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", method, params })}\n`);
+function jsonRpcNotification(method: string, params: JsonValue): JsonValue {
+  return { jsonrpc: "2.0", method, params };
+}
+
+function toJsonValue(value: unknown): JsonValue {
+  const normalized = JSON.parse(JSON.stringify(value)) as unknown;
+  return isJsonValue(normalized) ? normalized : String(value);
 }
 
 function stringifyUnknown(value: unknown): string {
@@ -1718,7 +1840,7 @@ function stringifyUnknown(value: unknown): string {
 }
 
 function startHttpServer(booted: BootedDaemon) {
-  const server = createServer((request, response) => {
+  const server = createHttpServer((request, response) => {
     Effect.runPromise(handleHttpRequest(booted, request, response).pipe(Effect.ignore));
   });
   server.listen(booted.config.http.port, booted.config.http.host, () => {
@@ -1746,6 +1868,14 @@ function handleHttpRequest(
     }
     if (request.method === "GET" && url.pathname === "/health") {
       writeJson(response, 200, { status: "ok" });
+      return;
+    }
+    if (!url.pathname.startsWith("/webhooks/")) {
+      writeJson(response, 404, {
+        error: "http_disabled_for_local_clients",
+        message:
+          "Local daemon operations use ACP stdio. HTTP is only enabled for health checks and external webhook ingress.",
+      });
       return;
     }
     if (request.method === "GET" && url.pathname === "/status") {
@@ -2025,6 +2155,171 @@ function handleHttpRequest(
       Effect.sync(() => writeJson(response, 500, { error: String(cause) })),
     ),
   );
+}
+
+function handleDaemonApiRequest(
+  booted: BootedDaemon,
+  request: {
+    method: string;
+    path: string;
+    query?: Record<string, string>;
+    body?: JsonValue;
+  },
+): Effect.Effect<unknown, unknown> {
+  return Effect.fn("daemon.handleDaemonApiRequest")(function* () {
+    const method = request.method.toUpperCase();
+    const path = request.path;
+    const body = request.body ?? {};
+    const query = request.query ?? {};
+
+    if (method === "GET" && path === "/health") {
+      return { status: "ok" };
+    }
+    if (method === "GET" && path === "/status") {
+      return createStatus(booted);
+    }
+    if (method === "GET" && path === "/config") {
+      return { config: sanitizeConfig(booted.config) };
+    }
+    if (method === "GET" && path === "/events") {
+      return { events: queryEvents(booted, query) };
+    }
+    if (method === "GET" && path === "/logs") {
+      return { logs: queryEvents(booted, query) };
+    }
+    if (method === "GET" && path === "/traces") {
+      return { traces: queryTraces(booted, query) };
+    }
+    if (method === "POST" && path === "/config/model-provider") {
+      return yield* upsertModelProviderConfig(booted, body);
+    }
+    const modelProviderActionMatch = path.match(
+      /^\/config\/model-provider\/([^/]+)\/(enable|disable)$/,
+    );
+    if (method === "POST" && modelProviderActionMatch) {
+      const [, providerId, action] = modelProviderActionMatch;
+      if (!providerId || !action) {
+        return yield* Effect.fail(new Error("not_found"));
+      }
+      return yield* setModelProviderEnabled(booted, providerId, action === "enable");
+    }
+    if (method === "POST" && path === "/config/remote-control") {
+      return yield* updateRemoteControlConfig(booted, body);
+    }
+    if (method === "GET" && path === "/approvals") {
+      return { approvals: booted.services.approvals.list() };
+    }
+    if (method === "GET" && path === "/plugins") {
+      const plugins = yield* booted.pluginRegistry.list();
+      return {
+        plugins: plugins.map(serializeInstalledPlugin),
+        hosts: booted.services.lifecycle.health(),
+      };
+    }
+    if (method === "GET" && path === "/skills") {
+      const skills = yield* booted.skillRegistry.list();
+      return { skills: skills.map(serializeInstalledSkill) };
+    }
+    if (method === "POST" && path === "/agent/run") {
+      return yield* runAgentRequest(booted, body);
+    }
+    if (method === "POST" && path === "/voice/turn") {
+      const result = yield* Effect.either(runVoiceTurn(booted, body));
+      if (result._tag === "Left") {
+        if (String(result.left).includes("ToolApprovalRequiredError")) {
+          yield* booted.services.saveState();
+          return {
+            status: "approval_required",
+            approvals: booted.services.approvals.list(),
+          };
+        }
+        return yield* Effect.fail(result.left);
+      }
+      return result.right;
+    }
+    if (method === "POST" && path === "/voice/stop") {
+      const result = yield* booted.services.runtime.executeTool(
+        "andy.voice.output.voice.stop",
+        {},
+      );
+      return { output: result.output };
+    }
+    if (method === "POST" && path === "/plugins/install-local") {
+      return yield* installLocalPlugin(booted, body);
+    }
+    if (method === "POST" && path === "/plugins/review-local") {
+      return yield* reviewLocalPlugin(booted, body);
+    }
+    if (method === "POST" && path === "/plugins/install-github") {
+      return yield* installGitHubPlugin(booted, body);
+    }
+    const pluginActionMatch = path.match(
+      /^\/plugins\/([^/]+)\/(enable|disable|remove)$/,
+    );
+    if (method === "POST" && pluginActionMatch) {
+      const [, pluginId, action] = pluginActionMatch;
+      if (!pluginId || !action) {
+        return yield* Effect.fail(new Error("not_found"));
+      }
+      return yield* mutatePluginLifecycle(booted, pluginId, action);
+    }
+    if (method === "POST" && path === "/plugins/restart-crashed") {
+      const result = yield* booted.services.lifecycle.restartCrashed();
+      yield* refreshInstalledPlugins(booted);
+      yield* booted.services.saveState();
+      return { plugins: result };
+    }
+    if (method === "POST" && path === "/skills/install-local") {
+      return yield* installLocalSkill(booted, body);
+    }
+    if (method === "POST" && path === "/skills/review-local") {
+      return yield* reviewLocalSkill(booted, body);
+    }
+    const skillActionMatch = path.match(/^\/skills\/([^/]+)\/(enable|disable|remove)$/);
+    if (method === "POST" && skillActionMatch) {
+      const [, skillId, action] = skillActionMatch;
+      if (!skillId || !action) {
+        return yield* Effect.fail(new Error("not_found"));
+      }
+      return yield* mutateSkillLifecycle(booted, skillId, action);
+    }
+    const skillRunMatch = path.match(/^\/skills\/([^/]+)\/run$/);
+    if (method === "POST" && skillRunMatch) {
+      const [, skillId] = skillRunMatch;
+      if (!skillId) {
+        return yield* Effect.fail(new Error("not_found"));
+      }
+      const result = yield* Effect.either(runSkillWorkflow(booted, skillId, body));
+      if (result._tag === "Left") {
+        if (String(result.left).includes("ToolApprovalRequiredError")) {
+          yield* booted.services.saveState();
+          return {
+            status: "approval_required",
+            approvals: booted.services.approvals.list(),
+          };
+        }
+        return yield* Effect.fail(result.left);
+      }
+      return result.right;
+    }
+    const approvalMatch = path.match(/^\/approvals\/([^/]+)\/(approve|deny)$/);
+    if (method === "POST" && approvalMatch) {
+      const [, approvalId, decision] = approvalMatch;
+      if (!approvalId || !decision) {
+        return yield* Effect.fail(new Error("not_found"));
+      }
+      const result =
+        decision === "approve"
+          ? yield* booted.services.approvalResume.resumeApproved(approvalId)
+          : yield* booted.services.approvalResume.deny(approvalId);
+      yield* booted.services.saveState();
+      return { approvalId, decision, result };
+    }
+
+    return yield* Effect.fail(
+      new Error(`Unsupported daemon API route ${method} ${path}`),
+    );
+  })();
 }
 
 function installLocalPlugin(

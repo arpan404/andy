@@ -120,13 +120,9 @@ Rules:
 
 ## Daemon HTTP Ingress
 
-The daemon exposes local HTTP ingress for health/status, approvals, and messaging webhooks:
+The daemon's HTTP surface is not the local client/admin API. Local clients use ACP stdio. HTTP remains only for health checks and external webhook ingress:
 
 - `GET /health`
-- `GET /status`
-- `GET /approvals`
-- `POST /approvals/:id/approve`
-- `POST /approvals/:id/deny`
 - `POST /webhooks/telegram`
 - `POST /webhooks/whatsapp`
 
@@ -156,7 +152,7 @@ Hosted plugins should be started through the core lifecycle manager. The manager
 
 First-party subprocess plugin manifests include both `entry` and `binaryEntrypoint`. Development can run the source entrypoint through Bun, but release builds compile each first-party plugin to `dist/plugin`. The subprocess host launches `binaryEntrypoint` when it exists, so release packages do not require Bun for first-party plugin execution.
 
-Plugin hosts report health as `running`, `stopped`, or `crashed`. The daemon exposes host health in status output and can call lifecycle restart supervision through `POST /plugins/restart-crashed`. If restart fails, runtime proxy tools are disabled so crashed plugins do not remain callable.
+Plugin hosts report health as `running`, `stopped`, or `crashed`. The daemon exposes host health in status output and can call lifecycle restart supervision through ACP `andy/request` path `POST /plugins/restart-crashed`. If restart fails, runtime proxy tools are disabled so crashed plugins do not remain callable.
 
 Plugin packages installed from a reviewed plan are materialized disabled by default. Enabling remains a separate lifecycle step so install, review, enable, and runtime execution stay distinct audit points.
 
@@ -166,7 +162,7 @@ The plugin manager includes a schema-versioned atomic JSON-file registry for loc
 
 Runtime tool execution checks cancellation tokens before a tool starts and races active tool execution against cancellation. Hosted worker and subprocess calls are interrupted on active cancellation so cancelled sessions and background jobs do not keep privileged tool actions running.
 
-The daemon exposes local plugin management APIs:
+The daemon exposes local plugin management through ACP `andy/request` paths:
 
 - `GET /plugins`
 - `POST /plugins/review-local`
@@ -181,7 +177,7 @@ Local and GitHub install records are disabled unless explicitly enabled, and ena
 
 Plugin packages may include `plugin.signature.json` next to `plugin.json`. The signature file signs the canonical plugin manifest with Ed25519. Daemon config can list trusted publishers with public keys under `trustedPublishers`; install/review output records plugin trust as `unsigned` or `verified` with the publisher id and public-key fingerprint. Unsigned plugins are still installable, but the user-facing review keeps that trust state explicit.
 
-The `andy` CLI binary wraps these local daemon APIs:
+The `andy` CLI binary wraps these local daemon APIs over ACP stdio:
 
 - `andy plugin list`
 - `andy plugin review-local <manifestPath>`
@@ -200,7 +196,7 @@ The `andy` CLI binary wraps these local daemon APIs:
 - `andy skill enable|disable|remove <skillId>`
 - `andy skill run <skillId> [--workflow name] [--input json]`
 
-The CLI defaults to `http://127.0.0.1:8765` and can target another daemon URL with `--url` or `ANDY_DAEMON_URL`.
+The CLI does not use daemon HTTP. It spawns the sibling `andy-daemon --acp` and selects state with `--home` or `ANDY_HOME`.
 
 Policy config is durable in `.andy/policy.json`. It supports allowed capabilities, approval-required capabilities, denied plugins, approval-required channels, approval-required risk levels, explicit rules, and expiring grants scoped by plugin, capability, user, channel, or task.
 
@@ -256,6 +252,6 @@ Plugin upgrades must not silently add capabilities. If the new manifest asks for
 
 ## Agent Client Protocol
 
-Andy supports ACP-style stdio communication through `andy-daemon --acp`. ACP is the preferred client-agent protocol for local IDEs and controller apps. The HTTP API remains for web console/admin operations and messaging webhooks, but it should not become the primary agent-client transport.
+Andy supports ACP-style stdio communication through `andy-daemon --acp`. ACP is the preferred client-agent protocol for local IDEs, controller apps, the CLI, and the desktop-hosted web console. Daemon HTTP remains only for health checks and external messaging webhooks.
 
 ACP prompts still execute through the same `AgentKernel`, plugin runtime, policy engine, approvals, cancellation registry, and audit surfaces. ACP does not grant a client direct access to undeclared plugin capabilities.

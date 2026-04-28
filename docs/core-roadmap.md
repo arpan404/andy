@@ -18,8 +18,8 @@ Andy Core should stay small and trusted. It should provide the kernel, policy bo
 - Release packaging also creates a tarball and SHA-256 checksum under `dist/installers/`.
 - The release bundle includes `andy-desktop`, a local controller app for starting/stopping the daemon and web console from one binary while product capabilities remain behind plugins and daemon APIs.
 - Daemon remote control supports Telegram polling/webhook mode and WhatsApp webhook mode: inbound messages are normalized, published through the communication bridge, handled by an agent session using a configured AI SDK model provider, and replied to through the channel plugin.
-- Daemon HTTP ingress exposes health/status, approval list/decision endpoints, and Telegram/WhatsApp webhook endpoints with optional shared-secret verification.
-- ACP stdio mode exists for agent-client communication. HTTP remains for web console/admin and webhook surfaces while clients migrate to ACP.
+- Daemon HTTP ingress is limited to health and Telegram/WhatsApp webhook endpoints with optional shared-secret verification. Local client/admin operations use ACP stdio.
+- ACP stdio mode exists for agent-client communication. The CLI and desktop-hosted web console use ACP; daemon HTTP remains only for health checks and external webhook ingress.
 - Agent session kernel with AI SDK result types.
 - Agent requests can include image parts that are passed to Vercel AI SDK model messages for multimodal providers.
 - Local voice turns route through voice plugins: transcript/audio handoff, agent run, and optional platform TTS response.
@@ -190,7 +190,7 @@ Policy decisions must remain explicit for external messaging, filesystem writes,
 
 ### Observability And Tracing
 
-Core has a trace manager and trace ids are threaded through agent sessions, model requests, tool requests, policy decisions, plugin execution audits, and background jobs. Daemon HTTP now exposes `/events`, `/logs`, and `/traces`, the CLI wraps them with `andy events`, `andy logs`, and `andy traces`, and the web console includes a read-only timeline and trace list.
+Core has a trace manager and trace ids are threaded through agent sessions, model requests, tool requests, policy decisions, plugin execution audits, and background jobs. Daemon ACP now exposes `/events`, `/logs`, and `/traces` through `andy/request`, the CLI wraps them with `andy events`, `andy logs`, and `andy traces`, and the web console reaches them through the desktop ACP bridge.
 
 It still needs full trace ids across:
 

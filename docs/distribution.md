@@ -112,7 +112,8 @@ The release bundle includes `bin/andy-desktop`, a local launcher/controller for 
 
 ## CLI Operations
 
-The compiled `dist/andy` binary can manage a running daemon:
+The compiled `dist/andy` binary manages daemon state through ACP stdio. It does
+not need the HTTP server for CLI operations:
 
 ```bash
 ./dist/andy setup --home ~/.andy-runtime
@@ -137,7 +138,7 @@ The compiled `dist/andy` binary can manage a running daemon:
 ./dist/andy traces --limit 25
 ```
 
-Use `--url http://host:port` or `ANDY_DAEMON_URL` to target a daemon that is not listening on `http://127.0.0.1:8765`.
+CLI daemon operations use ACP stdio, not HTTP. Use `--home` or `ANDY_HOME` to select the daemon home for one-shot ACP commands.
 
 `andy setup` can run before the daemon is already running. It creates the selected home directory and initializes `.andy/daemon.json` by invoking the sibling `andy-daemon --init` binary. Use `--force` only when intentionally recreating that config.
 
@@ -149,7 +150,7 @@ The daemon can run as an ACP-style stdio server for agent-client integrations:
 ./dist/andy-daemon --acp
 ```
 
-ACP is the preferred transport for IDEs, desktop controllers, and agent clients that need to create or resume sessions and submit prompts. The local HTTP API still exists for web console/admin operations and messaging webhooks, but new agent-client integrations should use ACP. See [ACP](./acp.md).
+ACP is the preferred transport for IDEs, desktop controllers, CLI commands, and agent clients that need to create or resume sessions and submit prompts. Daemon HTTP remains only for health checks and external messaging webhooks. See [ACP](./acp.md).
 
 ## Validation
 

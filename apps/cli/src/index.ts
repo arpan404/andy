@@ -3,19 +3,25 @@ import { ConsoleAuditSink } from "@andy/audit";
 import { AgentRuntime } from "@andy/core";
 import { definePlugin, defineTool } from "@andy/plugin-sdk";
 import { CapabilityPolicy } from "@andy/policy";
-import { getJsonObjectProperty, isJsonObject, type JsonValue } from "@andy/types";
+import {
+  getJsonObjectProperty,
+  isJsonObject,
+  type JsonObject,
+  type JsonValue,
+} from "@andy/types";
 import { Effect } from "effect";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
+import { platform } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { createConnection } from "node:net";
 
-type HttpMethod = "GET" | "POST";
+type DaemonRequestMethod = "GET" | "POST";
 
 interface ParsedArgs {
   command: string | undefined;
   rest: string[];
-  url: string;
   enable: boolean;
   manifestPath?: string;
   workflow?: string;
@@ -71,7 +77,7 @@ const corePlugin = definePlugin({
 const parsed = parseArgs(process.argv.slice(2));
 
 if (parsed.command === "status") {
-  await printDaemonJson(parsed.url, "GET", "/status");
+  await printDaemonJson("GET", "/status");
 } else if (parsed.command === "setup") {
   await runSetupCommand(parsed);
 } else if (parsed.command === "config") {
@@ -130,8 +136,8 @@ async function runSetupCommand(args: ParsedArgs): Promise<void> {
         home,
         configPath,
         next: [
-          "Start the daemon with ANDY_HOME set to this directory.",
-          "Use `andy config show` after the daemon is running.",
+          "Use `andy status --home <path>` or set ANDY_HOME for ACP-backed CLI commands.",
+          "Start `andy-desktop` or `andy-daemon` only when you need the web console, webhooks, or background loops.",
         ],
       },
       null,
@@ -143,7 +149,7 @@ async function runSetupCommand(args: ParsedArgs): Promise<void> {
 async function runConfigCommand(args: ParsedArgs): Promise<void> {
   const [action, subject, value] = args.rest;
   if (!action || action === "show") {
-    await printDaemonJson(args.url, "GET", "/config");
+    await printDaemonJson("GET", "/config");
     return;
   }
   if (action === "set-model-provider") {
@@ -153,7 +159,7 @@ async function runConfigCommand(args: ParsedArgs): Promise<void> {
         "Usage: andy config set-model-provider <id> --provider openai|anthropic|google --model <modelId> [--api-key-env ENV] [--enable]",
       );
     }
-    await printDaemonJson(args.url, "POST", "/config/model-provider", {
+    await printDaemonJson("POST", "/config/model-provider", {
       id,
       provider: normalizeProvider(args.provider),
       modelId: args.model,
@@ -168,7 +174,6 @@ async function runConfigCommand(args: ParsedArgs): Promise<void> {
       throw new Error(`Usage: andy config ${action} <id>`);
     }
     await printDaemonJson(
-      args.url,
       "POST",
       `/config/model-provider/${id}/${action.startsWith("enable") ? "enable" : "disable"}`,
     );
@@ -181,7 +186,7 @@ async function runConfigCommand(args: ParsedArgs): Promise<void> {
         "Usage: andy config remote <telegram|whatsapp> [--enable|--disable] [--model-provider id]",
       );
     }
-    await printDaemonJson(args.url, "POST", "/config/remote-control", {
+    await printDaemonJson("POST", "/config/remote-control", {
       channel,
       enabled: args.enable && !args.disable,
       ...(args.modelProviderId ? { modelProviderId: args.modelProviderId } : {}),
@@ -198,7 +203,7 @@ async function runAskCommand(args: ParsedArgs): Promise<void> {
   if (!message) {
     throw new Error("Usage: andy ask [--skills skill.a,skill.b] <message>");
   }
-  await printDaemonJson(args.url, "POST", "/agent/run", {
+  await printDaemonJson("POST", "/agent/run", {
     message,
     skillIds: args.skills,
     ...(args.modelProviderId ? { modelProviderId: args.modelProviderId } : {}),
@@ -209,7 +214,7 @@ async function runAskCommand(args: ParsedArgs): Promise<void> {
 async function runVoiceCommand(args: ParsedArgs): Promise<void> {
   const [action, ...rest] = args.rest;
   if (action === "stop") {
-    await printDaemonJson(args.url, "POST", "/voice/stop", {});
+    await printDaemonJson("POST", "/voice/stop", {});
     return;
   }
   if (!action || action === "turn") {
@@ -219,7 +224,7 @@ async function runVoiceCommand(args: ParsedArgs): Promise<void> {
         "Usage: andy voice turn [--audio path|--transcript path|text] [--no-speak] [--voice name]",
       );
     }
-    await printDaemonJson(args.url, "POST", "/voice/turn", {
+    await printDaemonJson("POST", "/voice/turn", {
       ...(text ? { text } : {}),
       ...(args.audioPath ? { audioPath: args.audioPath } : {}),
       ...(args.transcriptPath ? { transcriptPath: args.transcriptPath } : {}),
@@ -236,7 +241,7 @@ async function runVoiceCommand(args: ParsedArgs): Promise<void> {
 async function runPluginCommand(args: ParsedArgs): Promise<void> {
   const [action, ...rest] = args.rest;
   if (!action || action === "list") {
-    await printDaemonJson(args.url, "GET", "/plugins");
+    await printDaemonJson("GET", "/plugins");
     return;
   }
 
@@ -245,7 +250,7 @@ async function runPluginCommand(args: ParsedArgs): Promise<void> {
     if (!manifestPath) {
       throw new Error("Usage: andy plugin install-local <manifestPath> [--enable]");
     }
-    await printDaemonJson(args.url, "POST", "/plugins/install-local", {
+    await printDaemonJson("POST", "/plugins/install-local", {
       manifestPath,
       enabled: args.enable,
     });
@@ -256,7 +261,7 @@ async function runPluginCommand(args: ParsedArgs): Promise<void> {
     if (!manifestPath) {
       throw new Error("Usage: andy plugin review-local <manifestPath>");
     }
-    await printDaemonJson(args.url, "POST", "/plugins/review-local", {
+    await printDaemonJson("POST", "/plugins/review-local", {
       manifestPath,
     });
     return;
@@ -269,7 +274,7 @@ async function runPluginCommand(args: ParsedArgs): Promise<void> {
         "Usage: andy plugin install-github <repository-url> <commit-or-version-tag> [--manifest plugin.json] [--enable]",
       );
     }
-    await printDaemonJson(args.url, "POST", "/plugins/install-github", {
+    await printDaemonJson("POST", "/plugins/install-github", {
       repository,
       ref,
       ...(args.manifestPath ? { manifestPath: args.manifestPath } : {}),
@@ -283,12 +288,12 @@ async function runPluginCommand(args: ParsedArgs): Promise<void> {
     if (!pluginId) {
       throw new Error(`Usage: andy plugin ${action} <pluginId>`);
     }
-    await printDaemonJson(args.url, "POST", `/plugins/${pluginId}/${action}`);
+    await printDaemonJson("POST", `/plugins/${pluginId}/${action}`);
     return;
   }
 
   if (action === "restart-crashed") {
-    await printDaemonJson(args.url, "POST", "/plugins/restart-crashed");
+    await printDaemonJson("POST", "/plugins/restart-crashed");
     return;
   }
 
@@ -298,7 +303,7 @@ async function runPluginCommand(args: ParsedArgs): Promise<void> {
 async function runSkillCommand(args: ParsedArgs): Promise<void> {
   const [action, ...rest] = args.rest;
   if (!action || action === "list") {
-    await printDaemonJson(args.url, "GET", "/skills");
+    await printDaemonJson("GET", "/skills");
     return;
   }
 
@@ -307,7 +312,7 @@ async function runSkillCommand(args: ParsedArgs): Promise<void> {
     if (!manifestPath) {
       throw new Error("Usage: andy skill install-local <manifestPath> [--enable]");
     }
-    await printDaemonJson(args.url, "POST", "/skills/install-local", {
+    await printDaemonJson("POST", "/skills/install-local", {
       manifestPath,
       enabled: args.enable,
     });
@@ -318,7 +323,7 @@ async function runSkillCommand(args: ParsedArgs): Promise<void> {
     if (!manifestPath) {
       throw new Error("Usage: andy skill review-local <manifestPath>");
     }
-    await printDaemonJson(args.url, "POST", "/skills/review-local", {
+    await printDaemonJson("POST", "/skills/review-local", {
       manifestPath,
     });
     return;
@@ -329,7 +334,7 @@ async function runSkillCommand(args: ParsedArgs): Promise<void> {
     if (!skillId) {
       throw new Error(`Usage: andy skill ${action} <skillId>`);
     }
-    await printDaemonJson(args.url, "POST", `/skills/${skillId}/${action}`);
+    await printDaemonJson("POST", `/skills/${skillId}/${action}`);
     return;
   }
 
@@ -340,7 +345,7 @@ async function runSkillCommand(args: ParsedArgs): Promise<void> {
         'Usage: andy skill run <skillId> [--workflow name] [--input \'{"key":"value"}\']',
       );
     }
-    await printDaemonJson(args.url, "POST", `/skills/${skillId}/run`, {
+    await printDaemonJson("POST", `/skills/${skillId}/run`, {
       ...(args.workflow ? { workflow: args.workflow } : {}),
       input: args.input ?? {},
     });
@@ -353,7 +358,7 @@ async function runSkillCommand(args: ParsedArgs): Promise<void> {
 async function runApprovalCommand(args: ParsedArgs): Promise<void> {
   const [action, approvalId] = args.rest;
   if (!action || action === "list") {
-    await printDaemonJson(args.url, "GET", "/approvals");
+    await printDaemonJson("GET", "/approvals");
     return;
   }
 
@@ -361,7 +366,7 @@ async function runApprovalCommand(args: ParsedArgs): Promise<void> {
     if (!approvalId) {
       throw new Error(`Usage: andy approval ${action} <approvalId>`);
     }
-    await printDaemonJson(args.url, "POST", `/approvals/${approvalId}/${action}`);
+    await printDaemonJson("POST", `/approvals/${approvalId}/${action}`);
     return;
   }
 
@@ -386,37 +391,26 @@ async function runObservabilityCommand(args: ParsedArgs): Promise<void> {
     params.set("fromSequence", String(args.fromSequence));
   }
   const query = params.toString();
-  await printDaemonJson(args.url, "GET", `/${args.command}${query ? `?${query}` : ""}`);
+  await printDaemonJson("GET", `/${args.command}${query ? `?${query}` : ""}`);
 }
 
 async function printDaemonJson(
-  baseUrl: string,
-  method: HttpMethod,
+  method: DaemonRequestMethod,
   path: string,
   body?: JsonValue,
 ): Promise<void> {
-  const response = await fetch(`${baseUrl}${path}`, {
+  const [pathname, queryString] = path.split("?", 2);
+  const query = Object.fromEntries(new URLSearchParams(queryString ?? ""));
+  const result = await runAcpRequest("andy/request", {
     method,
-    ...(body
-      ? {
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(body),
-        }
-      : {}),
+    path: pathname ?? path,
+    ...(Object.keys(query).length > 0 ? { query } : {}),
+    ...(body !== undefined ? { body } : {}),
   });
-  const text = await response.text();
-  const parsedBody = parseJsonResponse(text);
-  if (!response.ok) {
-    throw new Error(
-      `Daemon request failed with ${response.status}: ${JSON.stringify(parsedBody)}`,
-    );
-  }
-  console.log(JSON.stringify(parsedBody, null, 2));
+  console.log(JSON.stringify(result, null, 2));
 }
 
 function parseArgs(input: string[]): ParsedArgs {
-  const { ANDY_DAEMON_URL } = process.env;
-  let url = ANDY_DAEMON_URL ?? "http://127.0.0.1:8765";
   let enable = false;
   let manifestPath: string | undefined;
   let home: string | undefined;
@@ -441,15 +435,6 @@ function parseArgs(input: string[]): ParsedArgs {
 
   for (let index = 0; index < input.length; index += 1) {
     const arg = input[index];
-    if (arg === "--url") {
-      const value = input[index + 1];
-      if (!value) {
-        throw new Error("--url requires a value.");
-      }
-      url = trimTrailingSlash(value);
-      index += 1;
-      continue;
-    }
     if (arg === "--enable") {
       enable = true;
       continue;
@@ -657,7 +642,6 @@ function parseArgs(input: string[]): ParsedArgs {
       .filter(
         (item) => !item.startsWith("__skills:") && !item.startsWith("__modelProvider:"),
       ),
-    url: trimTrailingSlash(url),
     enable,
     force,
     disable,
@@ -736,6 +720,7 @@ async function spawnAndCollect(
   command: string,
   args: string[],
   env: Record<string, string>,
+  stdin?: string,
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   return new Promise((resolveResult, reject) => {
     const child = spawn(command, args, {
@@ -753,6 +738,136 @@ async function spawnAndCollect(
     child.once("error", reject);
     child.once("exit", (code) => {
       resolveResult({ exitCode: code ?? 1, stdout, stderr });
+    });
+    if (stdin !== undefined) {
+      child.stdin.end(stdin);
+    }
+  });
+}
+
+async function runAcpRequest(method: string, params: JsonValue): Promise<JsonValue> {
+  const daemonPath = findDaemonBinary();
+  const id = 1;
+  const payload = `${JSON.stringify({
+    jsonrpc: "2.0",
+    id,
+    method,
+    params,
+  })}\n`;
+  const socketPath = getAcpSocketPath(resolveAndyHome());
+  if (existsSync(socketPath) || platform() === "win32") {
+    const socketResult = await tryAcpSocketRequest(socketPath, payload, id);
+    if (socketResult.connected) {
+      return socketResult.result;
+    }
+  }
+  const result = await spawnAndCollect(
+    daemonPath,
+    ["--acp"],
+    parsed.home ? { ANDY_HOME: resolve(parsed.home) } : {},
+    payload,
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr || `andy-daemon --acp exited ${result.exitCode}`);
+  }
+  const response = result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => parseJsonResponse(line))
+    .find(
+      (item): item is JsonObject =>
+        isJsonObject(item) && getJsonObjectProperty(item, "id") === id,
+    );
+  if (!response) {
+    throw new Error("ACP daemon did not return a response.");
+  }
+  const error = getJsonObjectProperty(response, "error");
+  if (isJsonObject(error)) {
+    const message = getJsonObjectProperty(error, "message");
+    throw new Error(typeof message === "string" ? message : JSON.stringify(error));
+  }
+  const resultValue = getJsonObjectProperty(response, "result");
+  return isJsonValue(resultValue) ? resultValue : {};
+}
+
+function resolveAndyHome(): string {
+  const { ANDY_HOME } = process.env;
+  return resolve(parsed.home ?? ANDY_HOME ?? process.cwd());
+}
+
+function getAcpSocketPath(home: string): string {
+  if (platform() === "win32") {
+    return `\\\\.\\pipe\\andy-${home.replace(/[^a-zA-Z0-9_.-]/g, "_")}`;
+  }
+  return join(home, ".andy", "andy.sock");
+}
+
+async function tryAcpSocketRequest(
+  socketPath: string,
+  payload: string,
+  id: number,
+): Promise<{ connected: true; result: JsonValue } | { connected: false }> {
+  return await new Promise((resolveRequest, reject) => {
+    const socket = createConnection(socketPath);
+    let buffer = "";
+    let settled = false;
+    const finishNotConnected = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      socket.destroy();
+      resolveRequest({ connected: false });
+    };
+    socket.once("error", (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT" || error.code === "ECONNREFUSED") {
+        finishNotConnected();
+        return;
+      }
+      if (!settled) {
+        settled = true;
+        reject(error);
+      }
+    });
+    socket.on("data", (chunk: Buffer) => {
+      buffer += chunk.toString("utf8");
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) {
+          continue;
+        }
+        const item = parseJsonResponse(trimmed);
+        if (!isJsonObject(item) || getJsonObjectProperty(item, "id") !== id) {
+          continue;
+        }
+        const error = getJsonObjectProperty(item, "error");
+        if (isJsonObject(error)) {
+          const message = getJsonObjectProperty(error, "message");
+          settled = true;
+          socket.end();
+          reject(
+            new Error(typeof message === "string" ? message : JSON.stringify(error)),
+          );
+          return;
+        }
+        const result = getJsonObjectProperty(item, "result");
+        settled = true;
+        socket.end();
+        resolveRequest({ connected: true, result: isJsonValue(result) ? result : {} });
+        return;
+      }
+    });
+    socket.once("connect", () => {
+      socket.write(payload);
+    });
+    socket.once("end", () => {
+      if (!settled) {
+        settled = true;
+        reject(new Error("ACP socket closed before returning a response."));
+      }
     });
   });
 }
@@ -778,16 +893,12 @@ function isJsonValue(value: unknown): value is JsonValue {
   );
 }
 
-function trimTrailingSlash(value: string): string {
-  return value.endsWith("/") ? value.slice(0, -1) : value;
-}
-
 function printHelp(): void {
   console.log(`Andy CLI
 
 Usage:
   andy setup [--home path] [--force]
-  andy status [--url http://127.0.0.1:8765]
+  andy status [--home path]
   andy config show
   andy config set-model-provider <id> --provider openai|anthropic|google --model <modelId> [--api-key-env ENV] [--enable]
   andy config enable-model-provider <id>
@@ -819,7 +930,7 @@ Usage:
   andy approval deny <approvalId>
 
 Environment:
-  ANDY_DAEMON_URL overrides the daemon URL.`);
+  ANDY_HOME selects the daemon home used by ACP-backed CLI commands.`);
 }
 
 async function runLegacySmoke(message: string): Promise<void> {
