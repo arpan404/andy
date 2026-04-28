@@ -459,34 +459,23 @@ async function runAcpBridge(
   acpClient?: PersistentAcpClient,
 ): Promise<unknown> {
   const payload = isRecord(request) ? request : {};
-  const { method: methodValue, path: pathValue, query: queryValue, body } = payload;
-  const method = typeof methodValue === "string" ? methodValue : "GET";
-  const path = typeof pathValue === "string" ? pathValue : "";
-  if (!path) {
-    throw new Error("ACP bridge path is required.");
+  const { method: methodValue, params } = payload;
+  const method = typeof methodValue === "string" ? methodValue : "";
+  if (!method.startsWith("andy.")) {
+    throw new Error("ACP bridge method is required.");
   }
-  const query = isRecord(queryValue) ? queryValue : undefined;
+  const requestParams = isRecord(params) ? params : {};
   const acpPayload = `${JSON.stringify({
     jsonrpc: "2.0",
     id: 1,
-    method: "andy/request",
-    params: {
-      method,
-      path,
-      ...(query ? { query } : {}),
-      ...(body !== undefined ? { body } : {}),
-    },
+    method,
+    params: requestParams,
   })}\n`;
   if (acpClient) {
     const persistentResult = await acpClient.request({
       jsonrpc: "2.0",
-      method: "andy/request",
-      params: {
-        method,
-        path,
-        ...(query ? { query } : {}),
-        ...(body !== undefined ? { body } : {}),
-      },
+      method,
+      params: requestParams,
     });
     if (persistentResult.connected) {
       return persistentResult.result;

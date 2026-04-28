@@ -6,6 +6,7 @@ import {
   createAndyDaemon,
   JsonFileCoreStateStore,
   OsSecretBroker,
+  SqliteCoreStateStore,
 } from "@andy/core";
 import type { AndyDaemonServices } from "@andy/core";
 import {
@@ -57,6 +58,7 @@ import { createServer as createNetServer, type Socket } from "node:net";
 
 interface DaemonConfig {
   statePath: string;
+  stateStore: DaemonStateStoreConfig;
   pluginRegistryPath: string;
   skillRegistryPath: string;
   pluginInstallRoot: string;
@@ -76,6 +78,11 @@ interface DaemonConfig {
 interface DaemonPluginConfig {
   manifestPath: string;
   enabled: boolean;
+}
+
+interface DaemonStateStoreConfig {
+  kind: "json" | "sqlite";
+  path: string;
 }
 
 interface DaemonSkillConfig {
@@ -258,7 +265,7 @@ function bootDaemon(path: string): Effect.Effect<BootedDaemon, unknown> {
     const services = yield* createAndyDaemon({
       audit,
       policy: createPolicyEngineFromConfig(policyConfig),
-      stateStore: new JsonFileCoreStateStore(resolveDataPath(config.statePath)),
+      stateStore: createCoreStateStore(config),
       secretBroker,
     });
 
@@ -636,6 +643,10 @@ function writeConfig(path: string, config: DaemonConfig): Effect.Effect<void, un
 function createDefaultConfig(): DaemonConfig {
   return {
     statePath: ".andy/state.json",
+    stateStore: {
+      kind: "sqlite",
+      path: ".andy/andy.sqlite",
+    },
     pluginRegistryPath: ".andy/plugins.json",
     skillRegistryPath: ".andy/skills.json",
     pluginInstallRoot: ".andy/github-plugins",
@@ -679,6 +690,9 @@ function createDefaultConfig(): DaemonConfig {
       "browser.submit_form",
       "codex.run",
       "codex.thread",
+      "mcp.connect",
+      "mcp.list_tools",
+      "mcp.call_tool",
       "computer.mouse",
       "computer.keyboard",
       "computer.window",
@@ -717,6 +731,8 @@ function createDefaultConfig(): DaemonConfig {
       "browser.submit_form",
       "codex.run",
       "codex.thread",
+      "mcp.connect",
+      "mcp.call_tool",
       "computer.mouse",
       "computer.keyboard",
       "computer.window",
@@ -747,6 +763,7 @@ function createDefaultConfig(): DaemonConfig {
       { manifestPath: "plugins/vision/plugin.json", enabled: false },
       { manifestPath: "plugins/browser/plugin.json", enabled: false },
       { manifestPath: "plugins/codex/plugin.json", enabled: false },
+      { manifestPath: "plugins/mcp-client/plugin.json", enabled: false },
       { manifestPath: "plugins/computer-control/plugin.json", enabled: false },
       { manifestPath: "plugins/background-worker/plugin.json", enabled: false },
       { manifestPath: "plugins/notifications/plugin.json", enabled: false },
@@ -813,6 +830,7 @@ function parseConfig(value: unknown): DaemonConfig {
   return {
     statePath:
       typeof record.statePath === "string" ? record.statePath : ".andy/state.json",
+    stateStore: parseStateStoreConfig(record.stateStore, defaults.stateStore),
     pluginRegistryPath:
       typeof record.pluginRegistryPath === "string"
         ? record.pluginRegistryPath
@@ -853,6 +871,32 @@ function parseConfig(value: unknown): DaemonConfig {
     remoteControl: parseRemoteControlConfig(record.remoteControl),
     http: parseHttpConfig(record.http),
   };
+}
+
+function parseStateStoreConfig(
+  value: unknown,
+  defaults: DaemonStateStoreConfig,
+): DaemonStateStoreConfig {
+  if (typeof value !== "object" || value === null) {
+    return defaults;
+  }
+  const record = value as Partial<DaemonStateStoreConfig>;
+  const kind =
+    record.kind === "json" || record.kind === "sqlite" ? record.kind : "sqlite";
+  const path =
+    typeof record.path === "string"
+      ? record.path
+      : kind === "json"
+        ? ".andy/state.json"
+        : ".andy/andy.sqlite";
+  return { kind, path };
+}
+
+function createCoreStateStore(config: DaemonConfig) {
+  if (config.stateStore.kind === "json") {
+    return new JsonFileCoreStateStore(resolveDataPath(config.stateStore.path));
+  }
+  return new SqliteCoreStateStore(resolveDataPath(config.stateStore.path));
 }
 
 function mergeStringDefaults(value: unknown, defaults: readonly string[]): string[] {
@@ -1029,6 +1073,7 @@ function createStatus(booted: BootedDaemon) {
   return {
     status: "ready",
     configPath: booted.configPath,
+    stateStore: booted.config.stateStore,
     pluginRegistryPath: booted.config.pluginRegistryPath,
     skillRegistryPath: booted.config.skillRegistryPath,
     pluginInstallRoot: booted.config.pluginInstallRoot,
@@ -1516,7 +1561,8 @@ function handleAcpRequest(
   write: JsonRpcWriter,
 ): Effect.Effect<JsonValue, unknown> {
   return Effect.fn("daemon.acp.request")(function* () {
-    switch (message.method) {
+    const method = message.method ?? "";
+    switch (method) {
       case "initialize":
         return createAcpInitializeResponse(message.params);
       case "session/new":
@@ -1530,12 +1576,11 @@ function handleAcpRequest(
         return yield* closeAcpSession(booted, sessions, message.params);
       case "session/prompt":
         return yield* promptAcpSession(booted, sessions, message.params, write);
-      case "andy/request":
-        return yield* handleAcpAndyRequest(booted, message.params);
       default:
-        return yield* Effect.fail(
-          new Error(`Unsupported ACP method '${message.method}'.`),
-        );
+        if (method.startsWith("andy.")) {
+          return yield* handleTypedAcpAndyMethod(booted, method, message.params);
+        }
+        return yield* Effect.fail(new Error(`Unsupported ACP method '${method}'.`));
     }
   })();
 }
@@ -1571,35 +1616,232 @@ function createAcpInitializeResponse(params: unknown): JsonValue {
   };
 }
 
-function handleAcpAndyRequest(
+function handleTypedAcpAndyMethod(
   booted: BootedDaemon,
+  method: string,
   params: unknown,
 ): Effect.Effect<JsonValue, unknown> {
-  return Effect.fn("daemon.acp.andyRequest")(function* () {
+  return Effect.fn("daemon.acp.typedAndyMethod")(function* () {
     const payload = isJsonObject(params) ? params : {};
-    const method = optionalJsonString(payload, "method") ?? "GET";
-    const path = optionalJsonString(payload, "path");
-    if (!path) {
-      return yield* Effect.fail(new Error("ACP andy/request path is required."));
+    const query = readAcpQuery(payload);
+    const body = readJsonProperty(payload, "body") ?? toJsonValue(payload);
+    const id =
+      optionalJsonString(payload, "id") ??
+      optionalJsonString(payload, "pluginId") ??
+      optionalJsonString(payload, "skillId") ??
+      optionalJsonString(payload, "approvalId") ??
+      optionalJsonString(payload, "providerId");
+    const action = optionalJsonString(payload, "action");
+
+    switch (method) {
+      case "andy.health":
+        return yield* typedDaemonRequest(booted, "GET", "/health", {}, query);
+      case "andy.status":
+        return yield* typedDaemonRequest(booted, "GET", "/status", {}, query);
+      case "andy.config.get":
+        return yield* typedDaemonRequest(booted, "GET", "/config", {}, query);
+      case "andy.config.upsertModelProvider":
+        return yield* typedDaemonRequest(
+          booted,
+          "POST",
+          "/config/model-provider",
+          body,
+          query,
+        );
+      case "andy.config.setModelProviderEnabled":
+        return yield* typedDaemonRequest(
+          booted,
+          "POST",
+          `/config/model-provider/${encodeURIComponent(requireAcpId(id, method))}/${readAcpEnabledAction(payload)}`,
+          {},
+          query,
+        );
+      case "andy.config.updateRemoteControl":
+        return yield* typedDaemonRequest(
+          booted,
+          "POST",
+          "/config/remote-control",
+          body,
+          query,
+        );
+      case "andy.agent.run":
+        return yield* typedDaemonRequest(booted, "POST", "/agent/run", body, query);
+      case "andy.voice.turn":
+        return yield* typedDaemonRequest(booted, "POST", "/voice/turn", body, query);
+      case "andy.voice.stop":
+        return yield* typedDaemonRequest(booted, "POST", "/voice/stop", {}, query);
+      case "andy.plugins.list":
+        return yield* typedDaemonRequest(booted, "GET", "/plugins", {}, query);
+      case "andy.plugins.installLocal":
+        return yield* typedDaemonRequest(
+          booted,
+          "POST",
+          "/plugins/install-local",
+          body,
+          query,
+        );
+      case "andy.plugins.reviewLocal":
+        return yield* typedDaemonRequest(
+          booted,
+          "POST",
+          "/plugins/review-local",
+          body,
+          query,
+        );
+      case "andy.plugins.installGithub":
+        return yield* typedDaemonRequest(
+          booted,
+          "POST",
+          "/plugins/install-github",
+          body,
+          query,
+        );
+      case "andy.plugins.setEnabled":
+        return yield* typedDaemonRequest(
+          booted,
+          "POST",
+          `/plugins/${encodeURIComponent(requireAcpId(id, method))}/${readAcpEnabledAction(payload)}`,
+          {},
+          query,
+        );
+      case "andy.plugins.remove":
+        return yield* typedDaemonRequest(
+          booted,
+          "POST",
+          `/plugins/${encodeURIComponent(requireAcpId(id, method))}/remove`,
+          {},
+          query,
+        );
+      case "andy.plugins.restartCrashed":
+        return yield* typedDaemonRequest(
+          booted,
+          "POST",
+          "/plugins/restart-crashed",
+          {},
+          query,
+        );
+      case "andy.skills.list":
+        return yield* typedDaemonRequest(booted, "GET", "/skills", {}, query);
+      case "andy.skills.installLocal":
+        return yield* typedDaemonRequest(
+          booted,
+          "POST",
+          "/skills/install-local",
+          body,
+          query,
+        );
+      case "andy.skills.reviewLocal":
+        return yield* typedDaemonRequest(
+          booted,
+          "POST",
+          "/skills/review-local",
+          body,
+          query,
+        );
+      case "andy.skills.setEnabled":
+        return yield* typedDaemonRequest(
+          booted,
+          "POST",
+          `/skills/${encodeURIComponent(requireAcpId(id, method))}/${readAcpEnabledAction(payload)}`,
+          {},
+          query,
+        );
+      case "andy.skills.remove":
+        return yield* typedDaemonRequest(
+          booted,
+          "POST",
+          `/skills/${encodeURIComponent(requireAcpId(id, method))}/remove`,
+          {},
+          query,
+        );
+      case "andy.skills.run":
+        return yield* typedDaemonRequest(
+          booted,
+          "POST",
+          `/skills/${encodeURIComponent(requireAcpId(id, method))}/run`,
+          body,
+          query,
+        );
+      case "andy.approvals.list":
+        return yield* typedDaemonRequest(booted, "GET", "/approvals", {}, query);
+      case "andy.approvals.decide":
+        return yield* typedDaemonRequest(
+          booted,
+          "POST",
+          `/approvals/${encodeURIComponent(requireAcpId(id, method))}/${readAcpDecision(action, method)}`,
+          {},
+          query,
+        );
+      case "andy.events.query":
+        return yield* typedDaemonRequest(booted, "GET", "/events", {}, query);
+      case "andy.logs.query":
+        return yield* typedDaemonRequest(booted, "GET", "/logs", {}, query);
+      case "andy.traces.query":
+        return yield* typedDaemonRequest(booted, "GET", "/traces", {}, query);
+      default:
+        return yield* Effect.fail(new Error(`Unsupported ACP method '${method}'.`));
     }
-    const queryValue = readJsonProperty(payload, "query");
-    const body = readJsonProperty(payload, "body");
-    const query: Record<string, string> = {};
-    if (isJsonObject(queryValue)) {
-      for (const [key, value] of Object.entries(queryValue)) {
-        if (typeof value === "string") {
-          query[key] = value;
-        }
-      }
-    }
-    const result = yield* handleDaemonApiRequest(booted, {
-      method,
-      path,
-      query,
-      ...(body !== undefined ? { body } : {}),
-    });
-    return toJsonValue(result);
   })();
+}
+
+function typedDaemonRequest(
+  booted: BootedDaemon,
+  method: string,
+  path: string,
+  body: JsonValue,
+  query: Record<string, string>,
+): Effect.Effect<JsonValue, unknown> {
+  return handleDaemonApiRequest(booted, { method, path, body, query }).pipe(
+    Effect.map(toJsonValue),
+  );
+}
+
+function requireAcpId(id: string | undefined, method: string): string {
+  if (!id) {
+    throw new Error(`${method} requires an id.`);
+  }
+  return id;
+}
+
+function readAcpEnabledAction(payload: JsonObject): "enable" | "disable" {
+  const action = optionalJsonString(payload, "action");
+  if (action === "enable" || action === "disable") {
+    return action;
+  }
+  const enabled = readJsonBoolean(payload, "enabled");
+  return enabled === false ? "disable" : "enable";
+}
+
+function readAcpDecision(
+  action: string | undefined,
+  method: string,
+): "approve" | "deny" {
+  if (action === "approve" || action === "deny") {
+    return action;
+  }
+  throw new Error(`${method} requires action approve or deny.`);
+}
+
+function readAcpQuery(payload: JsonObject): Record<string, string> {
+  const queryValue = readJsonProperty(payload, "query");
+  const source = isJsonObject(queryValue) ? queryValue : payload;
+  const query: Record<string, string> = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (
+      key !== "body" &&
+      key !== "id" &&
+      key !== "pluginId" &&
+      key !== "skillId" &&
+      key !== "approvalId" &&
+      key !== "providerId" &&
+      key !== "action" &&
+      key !== "enabled" &&
+      typeof value === "string"
+    ) {
+      query[key] = value;
+    }
+  }
+  return query;
 }
 
 function createAcpSession(

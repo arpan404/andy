@@ -399,15 +399,140 @@ async function printDaemonJson(
   path: string,
   body?: JsonValue,
 ): Promise<void> {
-  const [pathname, queryString] = path.split("?", 2);
+  const typed = toTypedAcpRequest(method, path, body);
+  const result = await runAcpRequest(typed.method, typed.params);
+  console.log(JSON.stringify(result, null, 2));
+}
+
+function toTypedAcpRequest(
+  method: DaemonRequestMethod,
+  path: string,
+  body?: JsonValue,
+): { method: string; params: JsonValue } {
+  const [pathname = path, queryString] = path.split("?", 2);
   const query = Object.fromEntries(new URLSearchParams(queryString ?? ""));
-  const result = await runAcpRequest("andy/request", {
-    method,
-    path: pathname ?? path,
+  const params = {
     ...(Object.keys(query).length > 0 ? { query } : {}),
     ...(body !== undefined ? { body } : {}),
-  });
-  console.log(JSON.stringify(result, null, 2));
+  };
+
+  if (method === "GET" && pathname === "/status") {
+    return { method: "andy.status", params };
+  }
+  if (method === "GET" && pathname === "/config") {
+    return { method: "andy.config.get", params };
+  }
+  if (method === "POST" && pathname === "/config/model-provider") {
+    return { method: "andy.config.upsertModelProvider", params: body ?? {} };
+  }
+  const modelProviderMatch = pathname.match(
+    /^\/config\/model-provider\/([^/]+)\/(enable|disable)$/,
+  );
+  if (method === "POST" && modelProviderMatch) {
+    return {
+      method: "andy.config.setModelProviderEnabled",
+      params: {
+        providerId: decodeURIComponent(modelProviderMatch[1] ?? ""),
+        action: modelProviderMatch[2] ?? "enable",
+      },
+    };
+  }
+  if (method === "POST" && pathname === "/config/remote-control") {
+    return { method: "andy.config.updateRemoteControl", params: body ?? {} };
+  }
+  if (method === "POST" && pathname === "/agent/run") {
+    return { method: "andy.agent.run", params: body ?? {} };
+  }
+  if (method === "POST" && pathname === "/voice/turn") {
+    return { method: "andy.voice.turn", params: body ?? {} };
+  }
+  if (method === "POST" && pathname === "/voice/stop") {
+    return { method: "andy.voice.stop", params: {} };
+  }
+  if (method === "GET" && pathname === "/plugins") {
+    return { method: "andy.plugins.list", params };
+  }
+  if (method === "POST" && pathname === "/plugins/install-local") {
+    return { method: "andy.plugins.installLocal", params: body ?? {} };
+  }
+  if (method === "POST" && pathname === "/plugins/review-local") {
+    return { method: "andy.plugins.reviewLocal", params: body ?? {} };
+  }
+  if (method === "POST" && pathname === "/plugins/install-github") {
+    return { method: "andy.plugins.installGithub", params: body ?? {} };
+  }
+  if (method === "POST" && pathname === "/plugins/restart-crashed") {
+    return { method: "andy.plugins.restartCrashed", params: {} };
+  }
+  const pluginActionMatch = pathname.match(
+    /^\/plugins\/([^/]+)\/(enable|disable|remove)$/,
+  );
+  if (method === "POST" && pluginActionMatch) {
+    const action = pluginActionMatch[2] ?? "enable";
+    return {
+      method: action === "remove" ? "andy.plugins.remove" : "andy.plugins.setEnabled",
+      params: {
+        pluginId: decodeURIComponent(pluginActionMatch[1] ?? ""),
+        ...(action !== "remove" ? { action } : {}),
+      },
+    };
+  }
+  if (method === "GET" && pathname === "/skills") {
+    return { method: "andy.skills.list", params };
+  }
+  if (method === "POST" && pathname === "/skills/install-local") {
+    return { method: "andy.skills.installLocal", params: body ?? {} };
+  }
+  if (method === "POST" && pathname === "/skills/review-local") {
+    return { method: "andy.skills.reviewLocal", params: body ?? {} };
+  }
+  const skillActionMatch = pathname.match(
+    /^\/skills\/([^/]+)\/(enable|disable|remove)$/,
+  );
+  if (method === "POST" && skillActionMatch) {
+    const action = skillActionMatch[2] ?? "enable";
+    return {
+      method: action === "remove" ? "andy.skills.remove" : "andy.skills.setEnabled",
+      params: {
+        skillId: decodeURIComponent(skillActionMatch[1] ?? ""),
+        ...(action !== "remove" ? { action } : {}),
+      },
+    };
+  }
+  const skillRunMatch = pathname.match(/^\/skills\/([^/]+)\/run$/);
+  if (method === "POST" && skillRunMatch) {
+    return {
+      method: "andy.skills.run",
+      params: {
+        skillId: decodeURIComponent(skillRunMatch[1] ?? ""),
+        body: body ?? {},
+      },
+    };
+  }
+  if (method === "GET" && pathname === "/approvals") {
+    return { method: "andy.approvals.list", params };
+  }
+  const approvalActionMatch = pathname.match(/^\/approvals\/([^/]+)\/(approve|deny)$/);
+  if (method === "POST" && approvalActionMatch) {
+    return {
+      method: "andy.approvals.decide",
+      params: {
+        approvalId: decodeURIComponent(approvalActionMatch[1] ?? ""),
+        action: approvalActionMatch[2] ?? "approve",
+      },
+    };
+  }
+  if (method === "GET" && pathname === "/events") {
+    return { method: "andy.events.query", params };
+  }
+  if (method === "GET" && pathname === "/logs") {
+    return { method: "andy.logs.query", params };
+  }
+  if (method === "GET" && pathname === "/traces") {
+    return { method: "andy.traces.query", params };
+  }
+
+  throw new Error(`No typed ACP method for ${method} ${pathname}.`);
 }
 
 function parseArgs(input: string[]): ParsedArgs {

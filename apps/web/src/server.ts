@@ -59,23 +59,16 @@ async function readRequestBody(request: IncomingMessage): Promise<unknown> {
 
 async function runAcpBridge(request: unknown): Promise<unknown> {
   const payload = isRecord(request) ? request : {};
-  const { method: methodValue, path: pathValue, query: queryValue, body } = payload;
-  const method = typeof methodValue === "string" ? methodValue : "GET";
-  const path = typeof pathValue === "string" ? pathValue : "";
-  if (!path) {
-    throw new Error("ACP bridge path is required.");
+  const { method: methodValue, params } = payload;
+  const method = typeof methodValue === "string" ? methodValue : "";
+  if (!method.startsWith("andy.")) {
+    throw new Error("ACP bridge method is required.");
   }
-  const query = isRecord(queryValue) ? queryValue : undefined;
   const acpPayload = `${JSON.stringify({
     jsonrpc: "2.0",
     id: 1,
-    method: "andy/request",
-    params: {
-      method,
-      path,
-      ...(query ? { query } : {}),
-      ...(body !== undefined ? { body } : {}),
-    },
+    method,
+    params: isRecord(params) ? params : {},
   })}\n`;
   const socketResult = await tryAcpSocketRequest(getAcpSocketPath(), acpPayload, 1);
   if (socketResult.connected) {

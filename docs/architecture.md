@@ -1,6 +1,6 @@
 # Andy Architecture
 
-For the complete current system view, including ACP, apps, plugins, skills, Codex, release packaging, and honest implementation limits, see [System Architecture](./system-architecture.md). For the proposed scalable redesign, see [Architecture V2](./architecture-v2.md).
+For the complete current system view, including ACP, apps, plugins, skills, Codex, release packaging, and honest implementation limits, see [System Architecture](./system-architecture.md). For the proposed scalable redesign, see [Architecture V2](./architecture-v2.md). For the active implementation checklist, see [V2 Implementation Todo](./v2-implementation-todo.md).
 
 Andy is a TypeScript-first, plugin-native AI agent runtime. The product model is an OS for agents:
 

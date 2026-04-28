@@ -190,7 +190,7 @@ Policy decisions must remain explicit for external messaging, filesystem writes,
 
 ### Observability And Tracing
 
-Core has a trace manager and trace ids are threaded through agent sessions, model requests, tool requests, policy decisions, plugin execution audits, and background jobs. Daemon ACP now exposes `/events`, `/logs`, and `/traces` through `andy/request`, the CLI wraps them with `andy events`, `andy logs`, and `andy traces`, and the web console reaches them through the desktop ACP bridge.
+Core has a trace manager and trace ids are threaded through agent sessions, model requests, tool requests, policy decisions, plugin execution audits, and background jobs. Daemon ACP now exposes observability through typed `andy.events.query`, `andy.logs.query`, and `andy.traces.query` methods, the CLI wraps them with `andy events`, `andy logs`, and `andy traces`, and the web console reaches them through the desktop ACP bridge.
 
 It still needs full trace ids across:
 

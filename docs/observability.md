@@ -16,11 +16,11 @@ The core owns event capture and replay. Apps only query filtered views. Plugins 
 
 ## ACP API
 
-Observability is exposed through ACP `andy/request` paths:
+Observability is exposed through typed ACP methods:
 
-- `GET /events`
-- `GET /logs`
-- `GET /traces`
+- `andy.events.query`
+- `andy.logs.query`
+- `andy.traces.query`
 
 Supported event/log filters:
 

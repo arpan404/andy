@@ -15,6 +15,7 @@ import { SubprocessManifestPluginHost } from "./plugin-host.js";
 import { AgentRuntime } from "./runtime.js";
 import { InMemorySecretBroker, type SecretBroker } from "./secrets.js";
 import { AgentSessionStore } from "./session-store.js";
+import { DurableTaskEngine } from "./tasks.js";
 import type { CoreStateStore } from "./state.js";
 import type { CoreStateStoreError } from "./errors.js";
 import { TraceManager } from "./tracing.js";
@@ -30,6 +31,7 @@ export interface AndyDaemonServices {
   approvals: ApprovalManager;
   approvalResume: ApprovalResumeEngine;
   background: BackgroundJobScheduler;
+  tasks: DurableTaskEngine;
   backgroundExecutor: BackgroundJobExecutor;
   cancellation: CancellationRegistry;
   secrets: SecretBroker;
@@ -63,6 +65,7 @@ export function createAndyDaemon(options: {
         runtime.executeTool(descriptor.toolName, descriptor.input, descriptor.context),
     });
     const background = new BackgroundJobScheduler({ audit });
+    const tasks = new DurableTaskEngine({ audit });
     const cancellation = new CancellationRegistry();
     runtime = new AgentRuntime({
       audit,
@@ -89,6 +92,7 @@ export function createAndyDaemon(options: {
         yield* sessions.hydrate(snapshot.sessions ?? []);
         yield* approvals.hydrate(snapshot.approvals ?? []);
         yield* background.hydrate(snapshot.backgroundJobs ?? []);
+        yield* tasks.hydrate(snapshot.durableTasks ?? { graphs: [], runs: [] });
         for (const action of snapshot.approvalActions ?? []) {
           yield* approvalResume.parkDescriptor(action.approval, action.descriptor);
         }
@@ -110,6 +114,7 @@ export function createAndyDaemon(options: {
           auditTraces: traces.list(),
           events: eventBus.replay(),
           approvalActions: approvalResume.listParkedDescriptors(),
+          durableTasks: tasks.snapshot(),
         });
       })();
     };
@@ -132,6 +137,7 @@ export function createAndyDaemon(options: {
       approvals,
       approvalResume,
       background,
+      tasks,
       backgroundExecutor,
       cancellation,
       secrets: options.secretBroker ?? new InMemorySecretBroker({ audit }),

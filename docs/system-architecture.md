@@ -71,17 +71,19 @@ No agent should call filesystem, shell, browser, desktop, messaging, voice, visi
 
 The CLI is an ACP client.
 
-It does not call daemon HTTP. For daemon-backed commands, it spawns the sibling daemon in ACP mode:
+It does not call daemon HTTP. For daemon-backed commands, it connects to the
+persistent ACP socket first and uses stdio ACP as a fallback:
 
 ```text
 andy command
-  -> spawn andy-daemon --acp
-  -> send JSON-RPC request over stdin
-  -> read JSON-RPC response from stdout
+  -> connect ACP socket
+  -> send typed JSON-RPC request
+  -> read JSON-RPC response
   -> print JSON result
 ```
 
-The CLI uses Andy-specific ACP method `andy/request` for status, config, plugin, skill, approval, observability, voice, and agent-run operations.
+The CLI uses typed Andy ACP methods for status, config, plugin, skill, approval,
+observability, voice, and agent-run operations.
 
 ### Daemon
 
@@ -157,9 +159,9 @@ Implemented methods:
 - `session/close`
 - `session/prompt`
 - `session/cancel` notification
-- `andy/request` Andy-specific management extension
+- typed `andy.*` management methods
 
-`session/prompt` runs the real agent kernel. `andy/request` maps CLI/web/admin paths such as `/plugins`, `/skills`, `/events`, `/voice/turn`, and `/agent/run` to internal daemon operations without using HTTP.
+`session/prompt` runs the real agent kernel. Typed `andy.*` methods expose CLI/web/admin operations such as plugins, skills, events, voice turns, and agent runs without using HTTP or path-shaped local control.
 
 ## HTTP Boundary
 
@@ -382,11 +384,11 @@ Andy records operational history through:
 - trace manager
 - durable state snapshots
 
-CLI and web console observability use ACP `andy/request` paths:
+CLI and web console observability use typed ACP methods:
 
-- `GET /events`
-- `GET /logs`
-- `GET /traces`
+- `andy.events.query`
+- `andy.logs.query`
+- `andy.traces.query`
 
 Observability is read-only and must not expose raw secret values.
 

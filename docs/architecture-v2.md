@@ -7,7 +7,7 @@ This is the proposed scalable architecture for Andy. It deliberately replaces pa
 The current architecture proves the product direction, but several choices do not scale:
 
 - CLI and web ACP bridges now prefer a persistent daemon ACP socket, but still retain one-shot `andy-daemon --acp` fallback.
-- Local admin operations are encoded as path-like `andy/request` calls instead of typed protocol methods.
+- Local admin operations use typed `andy.*` ACP methods instead of path-like `andy/request` calls.
 - JSON-file persistence is acceptable for local development, but not for growing sessions, events, jobs, approvals, and plugin metadata.
 - The daemon mixes kernel boot, transport serving, webhook ingress, background polling, plugin lifecycle, config mutation, and app-facing APIs in one large app boundary.
 - Browser UI still needs an HTTP-hosted bridge because browsers cannot speak stdio.
@@ -134,13 +134,7 @@ The core daemon may provide a generic ingress host capability, but platform-spec
 
 ACP should be the primary local control protocol.
 
-Current generic path-based method:
-
-```text
-andy/request { method, path, query, body }
-```
-
-This is acceptable as a compatibility bridge, but v2 should replace it with typed ACP methods:
+Local management uses typed ACP methods:
 
 ```text
 andy.status
@@ -395,6 +389,53 @@ Views:
 
 Queries should be ACP methods, not HTTP endpoints.
 
+## Evaluation V2
+
+Andy must not make product-quality claims without repeatable evals.
+
+The eval system is a separate package, not part of the agent kernel:
+
+```text
+@andy/evals
+  -> suite definitions
+  -> case definitions
+  -> runner adapter
+  -> metrics aggregation
+  -> persisted results later
+```
+
+Implemented foundation:
+
+- typed eval suites and cases
+- standard product/safety categories
+- task success, time, model calls, tool calls, cost, latency, approval correctness, unsafe action rate, user intervention count, and recovery quality metrics
+- an Effect-based suite runner that accepts an injected case runner
+- summary aggregation
+
+Remaining:
+
+- first-party eval suites and fixtures
+- packaged Andy/ACP eval runner
+- SQLite eval-result persistence
+- CLI and CI commands
+- regression thresholds
+
+Eval categories should include:
+
+- email triage
+- calendar scheduling
+- browser booking
+- file organization
+- coding task delegation
+- multi-step research
+- desktop control
+- voice interaction
+- memory recall
+- background reminders
+- security refusal
+- prompt injection resistance
+- tool failure recovery
+
 ## Security Model V2
 
 Target guarantees:
@@ -477,7 +518,7 @@ Telegram webhook
 - Add Unix socket/named pipe ACP listener. Done.
 - Convert CLI from one-shot subprocess ACP to persistent daemon ACP. Done with stdio fallback.
 - Convert desktop bridge from one-shot subprocess ACP to persistent daemon ACP. Done with stdio fallback.
-- Replace path-based `andy/request` with typed ACP methods.
+- Replace path-based `andy/request` with typed ACP methods. Done.
 
 ### Phase 2: Split Daemon Internals
 
@@ -488,8 +529,10 @@ Telegram webhook
 
 ### Phase 3: Storage
 
-- Add SQLite store package.
-- Migrate JSON state into SQLite.
+- Add SQLite core state store. Done for daemon runtime snapshots.
+- Migrate sessions, messages, approvals, background jobs, events, and traces into SQLite queryable tables. Done for core state snapshots.
+- Add durable task graph/run/step snapshot tables. Done for the task engine foundation.
+- Migrate plugin registry, skill registry, policy, memory metadata, and background task graph records into SQLite.
 - Keep JSON import/export.
 - Add event/session indexes and retention.
 

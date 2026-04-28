@@ -55,7 +55,7 @@ This list tracks the first production path now that the core kernel is ready eno
 - Core state now saves through an atomic JSON envelope with a schema version and temp-file rename.
 - Plugin registry JSON now saves through a schema-versioned atomic write.
 - Daemon writes and reads durable policy config from `.andy/policy.json`.
-- Daemon ACP `andy/request` now exposes plugin management paths for `GET /plugins`, `POST /plugins/install-local`, `POST /plugins/install-github`, lifecycle enable/disable/remove, and restart-crashed.
+- Daemon ACP now exposes typed plugin management methods for list, local install, GitHub install, lifecycle enable/disable/remove, and restart-crashed.
 - GitHub plugin installs clone immutable commit SHA or semver release tag refs into `.andy/github-plugins`, load the manifest from the checkout, and persist the checkout path in the installed-plugin registry.
 - CLI now exposes daemon-backed plugin commands for list, local install, GitHub install, enable, disable, remove, restart crashed hosts, and approval list/approve/deny.
 - First-party subprocess plugin manifests now include `binaryEntrypoint`, and the host launches compiled plugin binaries when present before falling back to Bun source entrypoints for development.

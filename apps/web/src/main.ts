@@ -97,24 +97,89 @@ interface DaemonStatus extends Record<string, unknown> {
 }
 
 async function request(path: string, init?: RequestInit): Promise<DaemonStatus> {
+  const typed = toTypedAcpRequest(path, init);
+  const response = await fetch("/acp", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(typed),
+  });
+  return (await response.json()) as DaemonStatus;
+}
+
+function toTypedAcpRequest(
+  path: string,
+  init?: RequestInit,
+): { method: string; params: Record<string, unknown> } {
   const [pathname, queryString] = path.split("?", 2);
+  const requestMethod = init?.method ?? "GET";
   const body =
     typeof init?.body === "string" && init.body.trim().length > 0
       ? (JSON.parse(init.body) as unknown)
       : undefined;
-  const response = await fetch("/acp", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      method: init?.method ?? "GET",
-      path: pathname ?? path,
-      ...(queryString
-        ? { query: Object.fromEntries(new URLSearchParams(queryString)) }
-        : {}),
-      ...(body !== undefined ? { body } : {}),
-    }),
-  });
-  return (await response.json()) as DaemonStatus;
+  const query = queryString
+    ? Object.fromEntries(new URLSearchParams(queryString))
+    : undefined;
+  const params = {
+    ...(query ? { query } : {}),
+    ...(body !== undefined ? { body } : {}),
+  };
+
+  if (requestMethod === "GET" && pathname === "/status") {
+    return { method: "andy.status", params };
+  }
+  if (requestMethod === "GET" && pathname === "/events") {
+    return { method: "andy.events.query", params };
+  }
+  if (requestMethod === "GET" && pathname === "/traces") {
+    return { method: "andy.traces.query", params };
+  }
+  if (requestMethod === "POST" && pathname === "/agent/run") {
+    return { method: "andy.agent.run", params: asRecord(body) ?? {} };
+  }
+  if (requestMethod === "POST" && pathname === "/voice/turn") {
+    return { method: "andy.voice.turn", params: asRecord(body) ?? {} };
+  }
+  if (requestMethod === "POST" && pathname === "/voice/stop") {
+    return { method: "andy.voice.stop", params: {} };
+  }
+  const skillRunMatch = (pathname ?? path).match(/^\/skills\/([^/]+)\/run$/);
+  if (requestMethod === "POST" && skillRunMatch) {
+    return {
+      method: "andy.skills.run",
+      params: {
+        skillId: decodeURIComponent(skillRunMatch[1] ?? ""),
+        body: asRecord(body) ?? {},
+      },
+    };
+  }
+  const lifecycleMatch = (pathname ?? path).match(
+    /^\/(plugins|skills)\/([^/]+)\/(enable|disable)$/,
+  );
+  if (requestMethod === "POST" && lifecycleMatch) {
+    const resource = lifecycleMatch[1] ?? "plugins";
+    const id = decodeURIComponent(lifecycleMatch[2] ?? "");
+    const action = lifecycleMatch[3] ?? "enable";
+    return {
+      method:
+        resource === "plugins" ? "andy.plugins.setEnabled" : "andy.skills.setEnabled",
+      params:
+        resource === "plugins" ? { pluginId: id, action } : { skillId: id, action },
+    };
+  }
+  const approvalMatch = (pathname ?? path).match(
+    /^\/approvals\/([^/]+)\/(approve|deny)$/,
+  );
+  if (requestMethod === "POST" && approvalMatch) {
+    return {
+      method: "andy.approvals.decide",
+      params: {
+        approvalId: decodeURIComponent(approvalMatch[1] ?? ""),
+        action: approvalMatch[2] ?? "approve",
+      },
+    };
+  }
+
+  throw new Error(`No typed ACP method for ${requestMethod} ${pathname ?? path}.`);
 }
 
 interface ListRecord extends Record<string, unknown> {

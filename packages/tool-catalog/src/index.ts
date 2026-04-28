@@ -63,6 +63,11 @@ export const Capabilities = {
     run: "codex.run",
     thread: "codex.thread",
   },
+  mcp: {
+    connect: "mcp.connect",
+    listTools: "mcp.list_tools",
+    callTool: "mcp.call_tool",
+  },
   background: {
     run: "background.run",
     schedule: "background.schedule",
@@ -142,6 +147,10 @@ export const Tools = {
   },
   codex: {
     run: "codex.run",
+  },
+  mcp: {
+    listTools: "mcp.list_tools",
+    callTool: "mcp.call_tool",
   },
   secrets: {
     get: "secrets.get",

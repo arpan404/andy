@@ -80,29 +80,68 @@ The desktop-hosted web console now uses an ACP bridge. Browser JavaScript posts 
 
 The daemon HTTP server still exists for health checks and external messaging webhooks. New local agent-client integrations should use ACP unless they specifically need to receive an external platform webhook.
 
-## CLI Admin Bridge
+## Typed Andy Methods
 
-Most CLI and web-console management commands use the ACP method:
+CLI, desktop, and web-console management commands use typed Andy ACP methods.
+The path-shaped `andy/request` bridge has been removed from local clients.
 
 ```text
-andy/request
+andy.status
+andy.config.get
+andy.config.upsertModelProvider
+andy.config.setModelProviderEnabled
+andy.config.updateRemoteControl
+andy.agent.run
+andy.voice.turn
+andy.voice.stop
+andy.plugins.list
+andy.plugins.reviewLocal
+andy.plugins.installLocal
+andy.plugins.installGithub
+andy.plugins.setEnabled
+andy.plugins.remove
+andy.plugins.restartCrashed
+andy.skills.list
+andy.skills.reviewLocal
+andy.skills.installLocal
+andy.skills.setEnabled
+andy.skills.remove
+andy.skills.run
+andy.approvals.list
+andy.approvals.decide
+andy.events.query
+andy.logs.query
+andy.traces.query
 ```
 
-This is an Andy-specific ACP extension that carries a daemon operation as structured params:
+Example:
 
 ```json
 {
   "jsonrpc": "2.0",
   "id": 1,
-  "method": "andy/request",
+  "method": "andy.plugins.list",
+  "params": {}
+}
+```
+
+Observability query example:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "andy.events.query",
   "params": {
-    "method": "GET",
-    "path": "/plugins"
+    "query": {
+      "limit": "50"
+    }
   }
 }
 ```
 
-The daemon handles this through internal operation functions, not by making an HTTP request to itself.
+Typed ACP methods avoid fake HTTP semantics, provide stable method names for
+client SDKs, and keep local control separate from external webhook HTTP.
 
 ## Validation
 
