@@ -532,6 +532,7 @@ Telegram webhook
 - Add SQLite core state store. Done for daemon runtime snapshots.
 - Migrate sessions, messages, approvals, background jobs, events, and traces into SQLite queryable tables. Done for core state snapshots.
 - Add durable task graph/run/step snapshot tables. Done for the task engine foundation.
+- Compile skill workflow invocations into durable task graphs and task runs. Done for immediate skill runs.
 - Migrate plugin registry, skill registry, policy, memory metadata, and background task graph records into SQLite.
 - Keep JSON import/export.
 - Add event/session indexes and retention.

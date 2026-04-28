@@ -4,6 +4,9 @@ import {
   AgentKernel,
   CommunicationSendError,
   createAndyDaemon,
+  type DurableTaskGraph,
+  type DurableTaskRun,
+  type DurableTaskStepDefinition,
   JsonFileCoreStateStore,
   OsSecretBroker,
   SqliteCoreStateStore,
@@ -1778,6 +1781,16 @@ function handleTypedAcpAndyMethod(
         return yield* typedDaemonRequest(booted, "GET", "/logs", {}, query);
       case "andy.traces.query":
         return yield* typedDaemonRequest(booted, "GET", "/traces", {}, query);
+      case "andy.tasks.list":
+        return toJsonValue(listDurableTasks(booted));
+      case "andy.tasks.runSkill":
+        return yield* typedDaemonRequest(
+          booted,
+          "POST",
+          "/tasks/run-skill",
+          body,
+          query,
+        );
       default:
         return yield* Effect.fail(new Error(`Unsupported ACP method '${method}'.`));
     }
@@ -2334,6 +2347,15 @@ function handleHttpRequest(
         decision === "approve"
           ? yield* booted.services.approvalResume.resumeApproved(approvalId)
           : yield* booted.services.approvalResume.deny(approvalId);
+      if (decision === "approve") {
+        yield* completeTaskApproval(
+          booted,
+          approvalId,
+          toJsonValue("output" in result ? result.output : result),
+        );
+      } else {
+        yield* failTaskApproval(booted, approvalId, "Approval denied.");
+      }
       yield* booted.services.saveState();
       writeJson(response, 200, { approvalId, decision, result });
       return;
@@ -2432,6 +2454,9 @@ function handleDaemonApiRequest(
     if (method === "GET" && path === "/traces") {
       return { traces: queryTraces(booted, query) };
     }
+    if (method === "GET" && path === "/tasks") {
+      return listDurableTasks(booted);
+    }
     if (method === "POST" && path === "/config/model-provider") {
       return yield* upsertModelProviderConfig(booted, body);
     }
@@ -2517,6 +2542,9 @@ function handleDaemonApiRequest(
     if (method === "POST" && path === "/skills/review-local") {
       return yield* reviewLocalSkill(booted, body);
     }
+    if (method === "POST" && path === "/tasks/run-skill") {
+      return yield* runSkillWorkflow(booted, readTaskSkillId(body), body);
+    }
     const skillActionMatch = path.match(/^\/skills\/([^/]+)\/(enable|disable|remove)$/);
     if (method === "POST" && skillActionMatch) {
       const [, skillId, action] = skillActionMatch;
@@ -2554,6 +2582,15 @@ function handleDaemonApiRequest(
         decision === "approve"
           ? yield* booted.services.approvalResume.resumeApproved(approvalId)
           : yield* booted.services.approvalResume.deny(approvalId);
+      if (decision === "approve") {
+        yield* completeTaskApproval(
+          booted,
+          approvalId,
+          toJsonValue("output" in result ? result.output : result),
+        );
+      } else {
+        yield* failTaskApproval(booted, approvalId, "Approval denied.");
+      }
       yield* booted.services.saveState();
       return { approvalId, decision, result };
     }
@@ -2966,6 +3003,9 @@ function runSkillWorkflow(
   {
     skillId: string;
     workflow: string;
+    taskGraphId: string;
+    taskRunId: string;
+    status: DurableTaskRun["status"];
     results: Array<{ stepId: string; toolName: string; output: JsonValue }>;
   },
   unknown
@@ -2993,66 +3033,358 @@ function runSkillWorkflow(
     }
     const input =
       payload.input !== undefined && isJsonValue(payload.input) ? payload.input : {};
-    const results: Array<{ stepId: string; toolName: string; output: JsonValue }> = [];
-    const context: SkillRenderContext = {
+    const graph = yield* registerSkillTaskGraph(booted, record, workflow);
+    const idempotencyKey = readSkillRunIdempotencyKey(body, skillId, workflow.name);
+    const run = yield* booted.services.tasks.createRun({
+      graphId: graph.id,
       input,
-      steps: new Map(),
-      vars: new Map(),
-    };
-
-    for (const step of workflow.steps) {
-      if (step.when && !readSkillCondition(step.when, context)) {
-        continue;
-      }
-      const eachValue = step.forEach ? readSkillPath(step.forEach, context) : undefined;
-      const items = Array.isArray(eachValue) ? eachValue : [undefined];
-      for (const item of items) {
-        if (item !== undefined) {
-          context.vars.set("item", item);
-        }
-        const renderedInput = renderSkillTemplate(step.input, context);
-        if (!isJsonObject(renderedInput)) {
-          throw new Error(
-            `Skill '${skillId}' step '${step.id}' did not render object input.`,
-          );
-        }
-        const result = yield* Effect.either(
-          booted.services.runtime.executeTool(step.toolName, renderedInput, {
-            taskId: `${skillId}:${workflow.name}:${step.id}`,
-          }),
-        );
-        if (result._tag === "Left") {
-          if (step.continueOnError) {
-            const errorOutput: JsonValue = { error: String(result.left) };
-            context.steps.set(step.id, errorOutput);
-            if (step.saveAs) {
-              context.vars.set(step.saveAs, errorOutput);
-            }
-            results.push({
-              stepId: step.id,
-              toolName: step.toolName,
-              output: errorOutput,
-            });
-            continue;
-          }
-          return yield* Effect.fail(result.left);
-        }
-        context.steps.set(step.id, result.right.output);
-        if (step.saveAs) {
-          context.vars.set(step.saveAs, result.right.output);
-        }
-        results.push({
-          stepId: step.id,
-          toolName: step.toolName,
-          output: result.right.output,
-        });
-      }
-      context.vars.delete("item");
-    }
-
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+    });
+    const executed = yield* executeDurableTaskRun(booted, run.id);
     yield* booted.services.saveState();
-    return { skillId, workflow: workflow.name, results };
+    return {
+      skillId,
+      workflow: workflow.name,
+      taskGraphId: graph.id,
+      taskRunId: executed.id,
+      status: executed.status,
+      results: taskRunResults(graph, executed),
+    };
   })();
+}
+
+function registerSkillTaskGraph(
+  booted: BootedDaemon,
+  skill: InstalledSkillRecord,
+  workflow: SkillManifest["workflows"][number],
+): Effect.Effect<DurableTaskGraph, Error> {
+  return booted.services.tasks.registerGraph({
+    id: `skill:${skill.manifest.id}:${workflow.name}:${skill.manifest.version}`,
+    name: `${skill.manifest.id}/${workflow.name}`,
+    version: skill.manifest.version,
+    trigger: { type: "manual" },
+    steps: workflow.steps.map((step, index): DurableTaskStepDefinition => {
+      const previous = workflow.steps[index - 1];
+      return {
+        id: step.id,
+        name: step.description ?? step.id,
+        toolName: step.toolName,
+        input: step.input,
+        ...(previous ? { dependsOn: [previous.id] } : {}),
+        metadata: {
+          type: "skill.step",
+          skillId: skill.manifest.id,
+          workflow: workflow.name,
+          ...(step.when ? { when: step.when } : {}),
+          ...(step.forEach ? { forEach: step.forEach } : {}),
+          ...(step.continueOnError ? { continueOnError: true } : {}),
+          ...(step.saveAs ? { saveAs: step.saveAs } : {}),
+        },
+      };
+    }),
+  });
+}
+
+function executeDurableTaskRun(
+  booted: BootedDaemon,
+  runId: string,
+): Effect.Effect<DurableTaskRun, unknown> {
+  return Effect.fn("daemon.executeDurableTaskRun")(function* () {
+    const holderId = `daemon:${process.pid}`;
+    let latest = findTaskRun(booted, runId);
+    while (latest.status !== "completed" && latest.status !== "failed") {
+      const ready = yield* booted.services.tasks.readySteps(runId);
+      if (ready.length === 0) {
+        break;
+      }
+      for (const step of ready) {
+        const leased = yield* booted.services.tasks.acquireLease({
+          runId,
+          stepId: step.id,
+          holderId,
+          leaseMs: 60_000,
+        });
+        if (!leased) {
+          continue;
+        }
+        const graph = requireTaskGraph(booted, latest.graphId);
+        const definition = requireTaskStepDefinition(graph, leased.definitionId);
+        const stepResult = yield* executeDurableSkillStep(
+          booted,
+          graph,
+          findTaskRun(booted, runId),
+          leased.id,
+          definition,
+        );
+        latest = stepResult;
+        yield* booted.services.saveState();
+        if (latest.status === "failed") {
+          return latest;
+        }
+      }
+      latest = findTaskRun(booted, runId);
+    }
+    return latest;
+  })();
+}
+
+function executeDurableSkillStep(
+  booted: BootedDaemon,
+  graph: DurableTaskGraph,
+  run: DurableTaskRun,
+  leasedStepId: string,
+  definition: DurableTaskStepDefinition,
+): Effect.Effect<DurableTaskRun, unknown> {
+  return Effect.fn("daemon.executeDurableSkillStep")(function* () {
+    const context = createTaskRenderContext(graph, run);
+    const metadata = isJsonObject(definition.metadata) ? definition.metadata : {};
+    const when = optionalJsonString(metadata, "when");
+    if (when && !readSkillCondition(when, context)) {
+      const skipped = yield* booted.services.tasks.skipStep({
+        runId: run.id,
+        stepId: leasedStepId,
+        reason: `Condition '${when}' evaluated false.`,
+      });
+      return skipped ?? findTaskRun(booted, run.id);
+    }
+    const forEach = optionalJsonString(metadata, "forEach");
+    const eachValue = forEach ? readSkillPath(forEach, context) : undefined;
+    const items = Array.isArray(eachValue) ? eachValue : [undefined];
+    const outputs: JsonValue[] = [];
+    for (const item of items) {
+      if (item !== undefined) {
+        context.vars.set("item", item);
+      }
+      const renderedInput = renderSkillTemplate(definition.input, context);
+      if (!isJsonObject(renderedInput)) {
+        throw new Error(
+          `Task step '${definition.id}' did not render object input for '${definition.toolName}'.`,
+        );
+      }
+      const result = yield* Effect.either(
+        booted.services.runtime.executeTool(definition.toolName, renderedInput, {
+          taskId: run.id,
+        }),
+      );
+      if (result._tag === "Left") {
+        const approvalId = readApprovalRequiredId(result.left);
+        if (approvalId) {
+          yield* booted.services.tasks.requireApproval({
+            runId: run.id,
+            stepId: leasedStepId,
+            approvalId,
+          });
+          return findTaskRun(booted, run.id);
+        }
+        if (readJsonBoolean(metadata, "continueOnError")) {
+          outputs.push({ error: String(result.left) });
+          continue;
+        }
+        const failed = yield* booted.services.tasks.failStep({
+          runId: run.id,
+          stepId: leasedStepId,
+          error: String(result.left),
+        });
+        return failed ?? findTaskRun(booted, run.id);
+      }
+      outputs.push(result.right.output);
+    }
+    context.vars.delete("item");
+    const output = outputs.length === 1 ? outputs[0] : outputs;
+    const completed = yield* booted.services.tasks.completeStep({
+      runId: run.id,
+      stepId: leasedStepId,
+      ...(output !== undefined ? { output } : {}),
+    });
+    return completed ?? findTaskRun(booted, run.id);
+  })();
+}
+
+function createTaskRenderContext(
+  graph: DurableTaskGraph,
+  run: DurableTaskRun,
+): SkillRenderContext {
+  const steps = new Map<string, JsonValue>();
+  const vars = new Map<string, JsonValue>();
+  for (const step of run.steps) {
+    if (step.output !== undefined) {
+      steps.set(step.definitionId, step.output);
+      const definition = graph.steps.find((item) => item.id === step.definitionId);
+      const metadata = isJsonObject(definition?.metadata) ? definition.metadata : {};
+      const saveAs = optionalJsonString(metadata, "saveAs");
+      if (saveAs) {
+        vars.set(saveAs, step.output);
+      }
+    }
+  }
+  return { input: run.input, steps, vars };
+}
+
+function findTaskRun(booted: BootedDaemon, runId: string): DurableTaskRun {
+  const run = booted.services.tasks.listRuns().find((item) => item.id === runId);
+  if (!run) {
+    throw new Error(`Task run '${runId}' not found.`);
+  }
+  return run;
+}
+
+function requireTaskGraph(booted: BootedDaemon, graphId: string): DurableTaskGraph {
+  const graph = booted.services.tasks.getGraph(graphId);
+  if (!graph) {
+    throw new Error(`Task graph '${graphId}' not found.`);
+  }
+  return graph;
+}
+
+function requireTaskStepDefinition(
+  graph: DurableTaskGraph,
+  definitionId: string,
+): DurableTaskStepDefinition {
+  const definition = graph.steps.find((item) => item.id === definitionId);
+  if (!definition) {
+    throw new Error(`Task step definition '${definitionId}' not found.`);
+  }
+  return definition;
+}
+
+function taskRunResults(
+  graph: DurableTaskGraph,
+  run: DurableTaskRun,
+): Array<{ stepId: string; toolName: string; output: JsonValue }> {
+  return run.steps.flatMap((step) => {
+    const definition = graph.steps.find((item) => item.id === step.definitionId);
+    if (!definition || step.output === undefined) {
+      return [];
+    }
+    return [
+      { stepId: definition.id, toolName: definition.toolName, output: step.output },
+    ];
+  });
+}
+
+function listDurableTasks(booted: BootedDaemon) {
+  return {
+    graphs: booted.services.tasks.listGraphs().map(serializeTaskGraph),
+    runs: booted.services.tasks.listRuns().map(serializeTaskRun),
+  };
+}
+
+function completeTaskApproval(
+  booted: BootedDaemon,
+  approvalId: string,
+  output: JsonValue,
+): Effect.Effect<void, unknown> {
+  return Effect.fn("daemon.completeTaskApproval")(function* () {
+    const match = findTaskStepByApproval(booted, approvalId);
+    if (!match) {
+      return;
+    }
+    yield* booted.services.tasks.completeStep({
+      runId: match.run.id,
+      stepId: match.step.id,
+      output,
+    });
+    yield* executeDurableTaskRun(booted, match.run.id);
+  })();
+}
+
+function failTaskApproval(
+  booted: BootedDaemon,
+  approvalId: string,
+  error: string,
+): Effect.Effect<void, unknown> {
+  return Effect.fn("daemon.failTaskApproval")(function* () {
+    const match = findTaskStepByApproval(booted, approvalId);
+    if (!match) {
+      return;
+    }
+    yield* booted.services.tasks.failStep({
+      runId: match.run.id,
+      stepId: match.step.id,
+      error,
+    });
+  })();
+}
+
+function findTaskStepByApproval(
+  booted: BootedDaemon,
+  approvalId: string,
+):
+  | {
+      run: DurableTaskRun;
+      step: DurableTaskRun["steps"][number];
+    }
+  | undefined {
+  for (const run of booted.services.tasks.listRuns()) {
+    const step = run.steps.find((item) => item.approvalId === approvalId);
+    if (step) {
+      return { run, step };
+    }
+  }
+  return undefined;
+}
+
+function serializeTaskGraph(graph: DurableTaskGraph) {
+  return {
+    ...graph,
+    createdAt: graph.createdAt.toISOString(),
+    updatedAt: graph.updatedAt.toISOString(),
+  };
+}
+
+function serializeTaskRun(run: DurableTaskRun) {
+  return {
+    ...run,
+    createdAt: run.createdAt.toISOString(),
+    updatedAt: run.updatedAt.toISOString(),
+    steps: run.steps.map((step) => ({
+      ...step,
+      updatedAt: step.updatedAt.toISOString(),
+      ...(step.runAfter ? { runAfter: step.runAfter.toISOString() } : {}),
+      ...(step.lease
+        ? {
+            lease: {
+              ...step.lease,
+              expiresAt: step.lease.expiresAt.toISOString(),
+            },
+          }
+        : {}),
+    })),
+  };
+}
+
+function readApprovalRequiredId(value: unknown): string | undefined {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+  const record = value as { _tag?: unknown; approvalId?: unknown };
+  return record._tag === "ToolApprovalRequiredError" &&
+    typeof record.approvalId === "string"
+    ? record.approvalId
+    : undefined;
+}
+
+function readSkillRunIdempotencyKey(
+  body: JsonValue,
+  skillId: string,
+  workflow: string,
+): string | undefined {
+  if (!isJsonObject(body)) {
+    return undefined;
+  }
+  const idempotencyKey = optionalJsonString(body, "idempotencyKey");
+  return idempotencyKey ? `${skillId}:${workflow}:${idempotencyKey}` : undefined;
+}
+
+function readTaskSkillId(body: JsonValue): string {
+  if (!isJsonObject(body)) {
+    throw new Error("skillId is required.");
+  }
+  const skillId = optionalJsonString(body, "skillId");
+  if (!skillId) {
+    throw new Error("skillId is required.");
+  }
+  return skillId;
 }
 
 function runAgentRequest(

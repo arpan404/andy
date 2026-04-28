@@ -44,6 +44,7 @@ export interface DurableTaskStepDefinition {
     input: JsonValue;
   };
   approvalRequired?: boolean;
+  metadata?: JsonValue;
 }
 
 export interface DurableTaskGraph {
@@ -304,7 +305,7 @@ export class DurableTaskEngine {
         ...(input.output !== undefined ? { output: input.output } : {}),
       });
       updated = self.#unlockDependentSteps(updated, now);
-      if (updated.steps.every((step) => step.status === "completed")) {
+      if (updated.steps.every(isTerminalSuccessStep)) {
         updated = { ...updated, status: "completed", updatedAt: now };
         yield* self.#record({
           type: "task.run.completed",
@@ -320,6 +321,39 @@ export class DurableTaskEngine {
         taskStepId: input.stepId,
         status: "completed",
       });
+      return updated;
+    })();
+  }
+
+  skipStep(input: {
+    runId: string;
+    stepId: string;
+    reason: string;
+  }): Effect.Effect<DurableTaskRun | undefined> {
+    const self = this;
+    return Effect.fn("DurableTaskEngine.skipStep")(function* () {
+      const run = self.#runs.get(input.runId);
+      if (!run) {
+        return undefined;
+      }
+      const now = new Date();
+      let updated = updateRunStep(run, input.stepId, {
+        status: "skipped",
+        lease: undefined,
+        error: input.reason,
+        updatedAt: now,
+      });
+      updated = self.#unlockDependentSteps(updated, now);
+      if (updated.steps.every(isTerminalSuccessStep)) {
+        updated = { ...updated, status: "completed", updatedAt: now };
+        yield* self.#record({
+          type: "task.run.completed",
+          taskRunId: updated.id,
+          taskGraphId: updated.graphId,
+          status: updated.status,
+        });
+      }
+      self.#runs.set(updated.id, updated);
       return updated;
     })();
   }
@@ -416,6 +450,14 @@ export class DurableTaskEngine {
 
   listRuns(): readonly DurableTaskRun[] {
     return [...this.#runs.values()];
+  }
+
+  listGraphs(): readonly DurableTaskGraph[] {
+    return [...this.#graphs.values()];
+  }
+
+  getGraph(graphId: string): DurableTaskGraph | undefined {
+    return this.#graphs.get(graphId);
   }
 
   snapshot(): DurableTaskSnapshot {
@@ -539,6 +581,10 @@ function validateGraph(steps: readonly DurableTaskStepDefinition[]): void {
 
 function hasDependencies(step: DurableTaskStepDefinition): boolean {
   return (step.dependsOn?.length ?? 0) > 0;
+}
+
+function isTerminalSuccessStep(step: DurableTaskStepState): boolean {
+  return step.status === "completed" || step.status === "skipped";
 }
 
 function updateRunStep(

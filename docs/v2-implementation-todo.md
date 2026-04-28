@@ -65,15 +65,17 @@ Implemented foundation:
 - approval checkpoints
 - event/cron/webhook trigger metadata
 - SQLite snapshot persistence for task graphs, runs, and steps
+- Skill workflow invocations now compile into durable task graphs.
+- `andy skill run` creates and executes a durable task run.
+- `andy task list` exposes persisted task graphs and runs through typed ACP.
 
 Remaining:
 
-- Compile skill manifests into task graphs.
-- Add a task executor that runs graph steps through `AgentRuntime`.
+- Broaden the task executor beyond immediate in-process skill runs.
 - Persist task graph tables as first-class daemon APIs.
 - Add cron/event/webhook trigger dispatchers.
 - Add compensation execution for failed downstream steps.
-- Add CLI/web visibility for task runs.
+- Add richer web visibility for task runs.
 
 Acceptance:
 

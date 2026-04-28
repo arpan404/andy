@@ -176,6 +176,26 @@ HTTP remains only for:
 
 This is necessary because Telegram, WhatsApp, and similar external systems deliver webhooks over HTTP. Removing HTTP completely would break those remote-control integrations.
 
+## Durable Skill Tasks
+
+Skill workflow runs are compiled into durable task graphs before execution.
+
+```text
+andy skill run
+  -> typed ACP `andy.skills.run`
+  -> load enabled skill manifest
+  -> compile workflow steps into a task graph
+  -> create durable task run
+  -> execute ready steps through AgentRuntime
+  -> persist task graph/run/step state
+  -> return taskRunId and step outputs
+```
+
+The current executor runs ready skill steps immediately in the daemon process and
+persists after each step. Approval-gated tool calls move the step into
+`waiting_approval`. Broader cron/event/webhook dispatch and compensation
+execution remain v2 follow-up work.
+
 ## Core Layer
 
 `packages/core` is the trusted kernel.

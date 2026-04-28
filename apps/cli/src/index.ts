@@ -86,6 +86,8 @@ if (parsed.command === "status") {
   await runPluginCommand(parsed);
 } else if (parsed.command === "skill" || parsed.command === "skills") {
   await runSkillCommand(parsed);
+} else if (parsed.command === "task" || parsed.command === "tasks") {
+  await runTaskCommand(parsed);
 } else if (parsed.command === "ask") {
   await runAskCommand(parsed);
 } else if (parsed.command === "voice") {
@@ -144,6 +146,15 @@ async function runSetupCommand(args: ParsedArgs): Promise<void> {
       2,
     ),
   );
+}
+
+async function runTaskCommand(args: ParsedArgs): Promise<void> {
+  const [action] = args.rest;
+  if (!action || action === "list") {
+    await printDaemonJson("GET", "/tasks");
+    return;
+  }
+  throw new Error(`Unknown task command '${action}'.`);
 }
 
 async function runConfigCommand(args: ParsedArgs): Promise<void> {
@@ -530,6 +541,9 @@ function toTypedAcpRequest(
   }
   if (method === "GET" && pathname === "/traces") {
     return { method: "andy.traces.query", params };
+  }
+  if (method === "GET" && pathname === "/tasks") {
+    return { method: "andy.tasks.list", params };
   }
 
   throw new Error(`No typed ACP method for ${method} ${pathname}.`);
@@ -1050,6 +1064,7 @@ Usage:
   andy skill disable <skillId>
   andy skill remove <skillId>
   andy skill run <skillId> [--workflow name] [--input '{"key":"value"}']
+  andy task list
   andy approval list
   andy approval approve <approvalId>
   andy approval deny <approvalId>
