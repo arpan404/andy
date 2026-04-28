@@ -309,7 +309,8 @@ passed through typed agent-run ACP payloads.
 Tool output tainting is also implemented for the first slice: explicit output
 provenance labels are merged into the session, and browser/filesystem
 read/list/messaging-style outputs are inferred as untrusted when labels are
-missing. V2 still needs richer explicit labels in first-party plugin outputs and
+missing. First-party browser, filesystem, messaging normalization, vision, and
+project read/search outputs now emit explicit labels. V2 still needs
 source-domain rules for future email/document/calendar/Slack/PDF connectors.
 
 ## Model Providers V2

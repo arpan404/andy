@@ -168,10 +168,30 @@ function extractMessages(payload: JsonValue | undefined): JsonObject[] {
           senderId: record.from,
           text: text.body,
           messageId: typeof record.id === "string" ? record.id : null,
+          provenance: messagingProvenance({
+            provider: "whatsapp",
+            conversationId: record.from,
+            messageId: typeof record.id === "string" ? record.id : record.from,
+          }),
           metadata: message as JsonValue,
         });
       }
     }
   }
   return normalized;
+}
+
+function messagingProvenance(input: {
+  provider: string;
+  conversationId: string;
+  messageId: string;
+}): JsonValue {
+  return [
+    {
+      sourceId: `${input.provider}:${input.conversationId}:${input.messageId}`,
+      sourceType: "messaging",
+      trust: "untrusted",
+      domain: input.provider,
+    },
+  ];
 }

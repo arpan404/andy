@@ -207,10 +207,14 @@ Implemented foundation:
 - Tool outputs can add explicit provenance labels.
 - Browser, filesystem read/list, and messaging-style tool outputs are inferred as untrusted context when they do not provide explicit labels.
 - Inferred untrusted tool-output provenance is merged into the session before the next model step, so later write/external side-effect tool calls inherit the taint.
+- First-party browser inspect/screenshot outputs include explicit browser provenance.
+- First-party filesystem read/read-sensitive/list outputs include explicit file provenance.
+- First-party Telegram and WhatsApp normalized inbound messages include explicit messaging provenance.
+- First-party vision image/screen outputs include explicit visual provenance.
+- First-party project read/search outputs include explicit file provenance.
 
 Remaining:
 
-- Add explicit provenance labels to first-party browser, filesystem, messaging, and future email/document/calendar plugin outputs instead of relying only on tool-name inference.
 - Label future email, document, calendar, Slack, PDF, and browser page subresources with richer source domains.
 - Add richer cross-domain action rules.
 - Surface provenance in approvals and observability UI.

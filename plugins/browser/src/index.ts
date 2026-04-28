@@ -91,6 +91,7 @@ function submitForm(input: JsonValue): Effect.Effect<JsonValue, unknown> {
 function screenshot(input: JsonValue): Effect.Effect<JsonValue, unknown> {
   return withClient(input, "browser.screenshot", (client, parsed) =>
     Effect.gen(function* () {
+      const location = yield* evaluate(client, "location.href");
       const outputPath = optionalString(parsed, "outputPath");
       const format = optionalString(parsed, "format") ?? "png";
       const quality = optionalNumber(parsed, "quality");
@@ -108,8 +109,10 @@ function screenshot(input: JsonValue): Effect.Effect<JsonValue, unknown> {
       }
       return {
         captured: true,
+        url: String(location),
         format,
         bytes: Buffer.byteLength(data, "base64"),
+        provenance: browserProvenance(String(location)),
         ...(outputPath ? { outputPath } : { imageBase64: data }),
       };
     }),
@@ -296,8 +299,28 @@ function pageInfo(client: CdpClient): Effect.Effect<JsonValue, unknown> {
       text: String(text),
       links: normalizeJson(links),
       forms: normalizeJson(forms),
+      provenance: browserProvenance(String(location)),
     };
   })();
+}
+
+function browserProvenance(url: string): JsonValue {
+  return [
+    {
+      sourceId: url,
+      sourceType: "browser",
+      trust: "untrusted",
+      domain: readHostname(url) ?? "browser",
+    },
+  ];
+}
+
+function readHostname(url: string): string | undefined {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return undefined;
+  }
 }
 
 function evaluate(

@@ -56,6 +56,7 @@ function readPath(input: JsonValue): Effect.Effect<JsonValue, unknown> {
     return {
       path,
       encoding,
+      provenance: fileProvenance(path, "file"),
       content: encoding === "base64" ? data.toString("base64") : data.toString("utf8"),
     };
   })();
@@ -78,6 +79,7 @@ function readSensitivePath(input: JsonValue): Effect.Effect<JsonValue, unknown> 
       path,
       encoding,
       sensitive: true,
+      provenance: fileProvenance(path, "file"),
       content: encoding === "base64" ? data.toString("base64") : data.toString("utf8"),
     };
   })();
@@ -91,13 +93,28 @@ function listPath(input: JsonValue): Effect.Effect<JsonValue, unknown> {
     const entries = yield* Effect.tryPromise(() =>
       readdir(path, { withFileTypes: true }),
     );
-    return entries
-      .map((entry) => ({
-        name: entry.name,
-        type: entry.isDirectory() ? "directory" : entry.isFile() ? "file" : "other",
-      }))
-      .sort((a, b) => a.name.localeCompare(b.name));
+    return {
+      path,
+      entries: entries
+        .map((entry) => ({
+          name: entry.name,
+          type: entry.isDirectory() ? "directory" : entry.isFile() ? "file" : "other",
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+      provenance: fileProvenance(path, "directory"),
+    };
   })();
+}
+
+function fileProvenance(path: string, domain: "file" | "directory"): JsonValue {
+  return [
+    {
+      sourceId: path,
+      sourceType: "file",
+      trust: "untrusted",
+      domain,
+    },
+  ];
 }
 
 function writePath(input: JsonValue): Effect.Effect<JsonValue, unknown> {

@@ -368,9 +368,11 @@ browser, filesystem read/list, and messaging-style tool outputs. Later tool
 calls inherit that taint and are denied or approval-gated by runtime policy when
 they attempt secrets, writes, or external side effects.
 
-Current limitation: explicit labels still need to be added to more first-party
-plugin outputs, and future email/document/calendar/Slack/PDF connectors need
-richer source-domain labeling than the current tool-name inference.
+Current first-party explicit labels exist on browser inspect/screenshot,
+filesystem read/read-sensitive/list, Telegram and WhatsApp normalized inbound
+messages, vision image/screen outputs, and project read/search outputs. Future
+email/document/calendar/Slack/PDF connectors still need richer source-domain
+labeling than the current generic shape.
 
 ## Plugin Architecture
 

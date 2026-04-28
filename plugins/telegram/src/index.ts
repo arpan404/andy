@@ -165,8 +165,31 @@ function normalizeTelegramUpdate(update: unknown): JsonObject | undefined {
     conversationId: String(chat.id),
     senderId: from?.id !== undefined ? String(from.id) : String(chat.id),
     text,
+    provenance: messagingProvenance({
+      provider: "telegram",
+      conversationId: String(chat.id),
+      messageId:
+        typeof message.message_id === "number"
+          ? String(message.message_id)
+          : String(record.update_id ?? chat.id),
+    }),
     metadata: update as JsonValue,
   };
+}
+
+function messagingProvenance(input: {
+  provider: string;
+  conversationId: string;
+  messageId: string;
+}): JsonValue {
+  return [
+    {
+      sourceId: `${input.provider}:${input.conversationId}:${input.messageId}`,
+      sourceType: "messaging",
+      trust: "untrusted",
+      domain: input.provider,
+    },
+  ];
 }
 
 function updateIdOf(item: unknown): number {
