@@ -13,6 +13,11 @@ anyhow = "1.0.100"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+
 [workspace.lints.rust]
 rust_2018_idioms = { level = "deny", priority = -1 }
 unused_lifetimes = "deny"
