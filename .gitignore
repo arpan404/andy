@@ -1,8 +1,5 @@
-.DS_Store
-dist/
-build/
 node_modules/
-.references/
-.andy/
-.env
-.env.*
+dist/
+.turbo/
+*.log
+.DS_Store
