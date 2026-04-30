@@ -1,0 +1,30 @@
+{
+    "id": "com.andy.example-plugin",
+    "version": "0.1.0",
+    "display_name": "Example Plugin",
+    "description": "Example plugin fixture for manifest discovery and validation.",
+    "entry_executable": "ExamplePluginHelper",
+    "capabilities": [
+        "tool-provider"
+    ],
+    "tools": [
+        {
+            "id": "example.tool.echo",
+            "description": "Echo a short string.",
+            "inputSchema": {
+                "text": "text to echo"
+            },
+            "outputSchema": {
+                "echo": "echoed text"
+            },
+            "risk": "readOnly",
+            "sourceTrust": "trustedSystem"
+        }
+    ],
+    "providers": [],
+    "event_sources": [],
+    "required_permissions": [],
+    "bundled_skills": [
+        "meeting-brief"
+    ]
+}

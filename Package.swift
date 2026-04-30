@@ -15,6 +15,8 @@ let package = Package(
         .library(name: "VoiceEngine", targets: ["VoiceEngine"]),
         .library(name: "IntegrationKit", targets: ["IntegrationKit"]),
         .library(name: "ToolEngine", targets: ["ToolEngine"]),
+        .library(name: "PluginSDK", targets: ["PluginSDK"]),
+        .library(name: "PluginHost", targets: ["PluginHost"]),
         .library(name: "AssistantRuntime", targets: ["AssistantRuntime"]),
         .library(name: "AppShell", targets: ["AppShell"]),
     ],
@@ -54,6 +56,21 @@ let package = Package(
             ]
         ),
         .target(
+            name: "PluginSDK",
+            dependencies: [
+                "AssistantTypes",
+            ]
+        ),
+        .target(
+            name: "PluginHost",
+            dependencies: [
+                "AssistantTypes",
+                "Observability",
+                "PluginSDK",
+                "ToolEngine",
+            ]
+        ),
+        .target(
             name: "AssistantRuntime",
             dependencies: [
                 "AssistantTypes",
@@ -61,6 +78,7 @@ let package = Package(
                 "ModelEngine",
                 "Observability",
                 "PolicySafety",
+                "PluginHost",
                 "ToolEngine",
                 "VoiceEngine",
             ]
@@ -75,6 +93,7 @@ let package = Package(
                 "ModelEngine",
                 "Observability",
                 "PolicySafety",
+                "PluginHost",
                 "ToolEngine",
                 "VoiceEngine",
             ]
@@ -86,6 +105,16 @@ let package = Package(
                 "MemoryStore",
                 "ModelEngine",
                 "PolicySafety",
+                "ToolEngine",
+            ]
+        ),
+        .testTarget(
+            name: "PluginSystemTests",
+            dependencies: [
+                "AssistantTypes",
+                "Observability",
+                "PluginHost",
+                "PluginSDK",
                 "ToolEngine",
             ]
         ),

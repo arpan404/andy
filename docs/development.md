@@ -29,6 +29,12 @@
 - `Sources/ToolEngine`  
   Tool registry and policy-gated execution.
 
+- `Sources/PluginSDK`  
+  Plugin manifest models, validation, and author-facing contracts.
+
+- `Sources/PluginHost`  
+  Plugin discovery, registration, and host-side lifecycle foundation.
+
 - `Sources/AssistantRuntime`  
   Assistant orchestrator loop.
 
@@ -37,6 +43,9 @@
 
 - `Tests/AssistantArchitectureTests`  
   Unit/integration architecture tests.
+
+- `Tests/PluginSystemTests`  
+  Plugin manifest, discovery, and registration tests.
 
 ## Commands
 
