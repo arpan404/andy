@@ -50,7 +50,8 @@ public actor InMemoryMemoryRepository: MemoryRepository {
                 return false
             }
             if let subjectContains = filters.subjectContains,
-               !record.subject.localizedCaseInsensitiveContains(subjectContains) {
+                !record.subject.localizedCaseInsensitiveContains(subjectContains)
+            {
                 return false
             }
             return true
@@ -125,7 +126,8 @@ public final class SwiftDataMemoryRepository: MemoryRepository {
                     return false
                 }
                 if let subjectContains = filters.subjectContains,
-                   !record.subject.localizedCaseInsensitiveContains(subjectContains) {
+                    !record.subject.localizedCaseInsensitiveContains(subjectContains)
+                {
                     return false
                 }
                 return true

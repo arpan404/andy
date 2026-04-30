@@ -1,7 +1,7 @@
 import AppShell
-import SwiftUI
-import SwiftData
 import MemoryStore
+import SwiftData
+import SwiftUI
 
 @main
 struct AndyDesktopApp: App {
@@ -12,7 +12,8 @@ struct AndyDesktopApp: App {
         do {
             modelContainer = try ModelContainer(for: MemoryEntity.self)
             rootViewModel = AssistantAppContainer.makeViewModel(context: modelContainer.mainContext)
-        } catch {
+        }
+        catch {
             fatalError("Unable to initialize ModelContainer: \(error)")
         }
     }

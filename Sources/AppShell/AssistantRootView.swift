@@ -13,7 +13,8 @@ public struct AssistantRootView: View {
             OnboardingView {
                 viewModel.completeOnboarding()
             }
-        } else {
+        }
+        else {
             mainLayout
         }
     }
@@ -89,7 +90,8 @@ public struct AssistantRootView: View {
             if viewModel.pendingApprovals.isEmpty {
                 Text("No pending actions.")
                     .foregroundStyle(.secondary)
-            } else {
+            }
+            else {
                 ForEach(viewModel.pendingApprovals) { approval in
                     VStack(alignment: .leading, spacing: 4) {
                         Text(approval.action.details)

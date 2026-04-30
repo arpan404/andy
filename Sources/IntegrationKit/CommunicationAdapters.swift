@@ -24,14 +24,14 @@ public struct MailToolAdapter: IntegrationToolAdapter {
         await observability.append(name: "tool.mail.execute", details: to)
 
         let script = """
-        tell application "Mail"
-            set newMessage to make new outgoing message with properties {subject:"\(subject)", content:"\(body)"}
-            tell newMessage
-                make new to recipient at end of to recipients with properties {address:"\(to)"}
-                activate
+            tell application "Mail"
+                set newMessage to make new outgoing message with properties {subject:"\(subject)", content:"\(body)"}
+                tell newMessage
+                    make new to recipient at end of to recipients with properties {address:"\(to)"}
+                    activate
+                end tell
             end tell
-        end tell
-        """
+            """
 
         let appleScript = NSAppleScript(source: script)
         var error: NSDictionary?
@@ -67,12 +67,12 @@ public struct MessagesToolAdapter: IntegrationToolAdapter {
         await observability.append(name: "tool.messages.execute", details: recipient)
 
         let script = """
-        tell application "Messages"
-            set targetService to 1st service whose service type = iMessage
-            set targetBuddy to buddy "\(recipient)" of targetService
-            send "\(text)" to targetBuddy
-        end tell
-        """
+            tell application "Messages"
+                set targetService to 1st service whose service type = iMessage
+                set targetBuddy to buddy "\(recipient)" of targetService
+                send "\(text)" to targetBuddy
+            end tell
+            """
 
         let appleScript = NSAppleScript(source: script)
         var error: NSDictionary?

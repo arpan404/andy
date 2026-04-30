@@ -10,9 +10,9 @@ public enum IntegrationError: LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case let .unsupportedAction(action):
+        case .unsupportedAction(let action):
             return "Unsupported integration action: \(action)"
-        case let .permissionDenied(scope):
+        case .permissionDenied(let scope):
             return "Permission denied for: \(scope)"
         }
     }
