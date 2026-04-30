@@ -48,3 +48,9 @@ The default generated config includes this provider disabled. Enable it only whe
 - Provider registration does not expose the raw API key through daemon status.
 - Model calls still go through the core AI SDK runner, tool adapter, policy-gated runtime, and audit surface.
 - Provider integrations must depend on Vercel AI SDK provider packages such as `@ai-sdk/openai`, not provider-native SDKs.
+
+## Codex Is Different
+
+Codex subscription access is not an AI SDK model provider and should not be treated as an OpenAI API key. Andy integrates Codex through the first-party `andy.codex` plugin, which delegates coding tasks to `@openai/codex-sdk` and the locally authenticated Codex CLI/App Server flow.
+
+See [Codex Integration](./codex.md).

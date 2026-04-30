@@ -41,8 +41,10 @@ export const Capabilities = {
   },
   voice: {
     listen: "voice.listen",
+    record: "voice.record",
     transcribe: "voice.transcribe",
     speak: "voice.speak",
+    stop: "voice.stop",
   },
   vision: {
     capture: "screen.capture",
@@ -51,7 +53,20 @@ export const Capabilities = {
   },
   browser: {
     navigate: "browser.navigate",
+    inspect: "browser.inspect",
+    click: "browser.click",
+    type: "browser.type",
+    screenshot: "browser.screenshot",
     submitForm: "browser.submit_form",
+  },
+  codex: {
+    run: "codex.run",
+    thread: "codex.thread",
+  },
+  mcp: {
+    connect: "mcp.connect",
+    listTools: "mcp.list_tools",
+    callTool: "mcp.call_tool",
   },
   background: {
     run: "background.run",
@@ -114,6 +129,28 @@ export const Tools = {
   messaging: {
     receive: "messaging.receive",
     send: "messaging.send",
+  },
+  voice: {
+    listen: "voice.listen",
+    record: "voice.record",
+    transcribe: "voice.transcribe",
+    speak: "voice.speak",
+    stop: "voice.stop",
+  },
+  browser: {
+    navigate: "browser.navigate",
+    inspect: "browser.inspect",
+    click: "browser.click",
+    type: "browser.type",
+    screenshot: "browser.screenshot",
+    submitForm: "browser.submit_form",
+  },
+  codex: {
+    run: "codex.run",
+  },
+  mcp: {
+    listTools: "mcp.list_tools",
+    callTool: "mcp.call_tool",
   },
   secrets: {
     get: "secrets.get",

@@ -120,13 +120,9 @@ Rules:
 
 ## Daemon HTTP Ingress
 
-The daemon exposes local HTTP ingress for health/status, approvals, and messaging webhooks:
+The daemon's HTTP surface is not the local client/admin API. Local clients use ACP stdio. HTTP remains only for health checks and external webhook ingress:
 
 - `GET /health`
-- `GET /status`
-- `GET /approvals`
-- `POST /approvals/:id/approve`
-- `POST /approvals/:id/deny`
 - `POST /webhooks/telegram`
 - `POST /webhooks/whatsapp`
 
@@ -156,7 +152,7 @@ Hosted plugins should be started through the core lifecycle manager. The manager
 
 First-party subprocess plugin manifests include both `entry` and `binaryEntrypoint`. Development can run the source entrypoint through Bun, but release builds compile each first-party plugin to `dist/plugin`. The subprocess host launches `binaryEntrypoint` when it exists, so release packages do not require Bun for first-party plugin execution.
 
-Plugin hosts report health as `running`, `stopped`, or `crashed`. The daemon exposes host health in status output and can call lifecycle restart supervision through `POST /plugins/restart-crashed`. If restart fails, runtime proxy tools are disabled so crashed plugins do not remain callable.
+Plugin hosts report health as `running`, `stopped`, or `crashed`. The daemon exposes host health in status output and can call lifecycle restart supervision through typed ACP method `andy.plugins.restartCrashed`. If restart fails, runtime proxy tools are disabled so crashed plugins do not remain callable.
 
 Plugin packages installed from a reviewed plan are materialized disabled by default. Enabling remains a separate lifecycle step so install, review, enable, and runtime execution stay distinct audit points.
 
@@ -166,20 +162,21 @@ The plugin manager includes a schema-versioned atomic JSON-file registry for loc
 
 Runtime tool execution checks cancellation tokens before a tool starts and races active tool execution against cancellation. Hosted worker and subprocess calls are interrupted on active cancellation so cancelled sessions and background jobs do not keep privileged tool actions running.
 
-The daemon exposes local plugin management APIs:
+The daemon exposes local plugin management through typed ACP methods:
 
-- `GET /plugins`
-- `POST /plugins/review-local`
-- `POST /plugins/install-local`
-- `POST /plugins/install-github`
-- `POST /plugins/:id/enable`
-- `POST /plugins/:id/disable`
-- `POST /plugins/:id/remove`
-- `POST /plugins/restart-crashed`
+- `andy.plugins.list`
+- `andy.plugins.reviewLocal`
+- `andy.plugins.installLocal`
+- `andy.plugins.installGithub`
+- `andy.plugins.setEnabled`
+- `andy.plugins.remove`
+- `andy.plugins.restartCrashed`
 
 Local and GitHub install records are disabled unless explicitly enabled, and enable/disable/remove still flow through registry state, lifecycle state, runtime tool enablement, policy, and audit. GitHub installs require an immutable commit SHA or semver release tag, clone into `.andy/github-plugins`, and store the local checkout path in the registry so daemon startup never executes directly from a remote URL.
 
-The `andy` CLI binary wraps these local daemon APIs:
+Plugin packages may include `plugin.signature.json` next to `plugin.json`. The signature file signs the canonical plugin manifest with Ed25519. Daemon config can list trusted publishers with public keys under `trustedPublishers`; install/review output records plugin trust as `unsigned` or `verified` with the publisher id and public-key fingerprint. Unsigned plugins are still installable, but the user-facing review keeps that trust state explicit.
+
+The `andy` CLI binary wraps these local daemon APIs over ACP stdio:
 
 - `andy plugin list`
 - `andy plugin review-local <manifestPath>`
@@ -198,7 +195,7 @@ The `andy` CLI binary wraps these local daemon APIs:
 - `andy skill enable|disable|remove <skillId>`
 - `andy skill run <skillId> [--workflow name] [--input json]`
 
-The CLI defaults to `http://127.0.0.1:8765` and can target another daemon URL with `--url` or `ANDY_DAEMON_URL`.
+The CLI does not use daemon HTTP. It spawns the sibling `andy-daemon --acp` and selects state with `--home` or `ANDY_HOME`.
 
 Policy config is durable in `.andy/policy.json`. It supports allowed capabilities, approval-required capabilities, denied plugins, approval-required channels, approval-required risk levels, explicit rules, and expiring grants scoped by plugin, capability, user, channel, or task.
 
@@ -225,9 +222,12 @@ Implemented first-party system plugins:
 - `@andy/plugin-memory-markdown` stores inspectable Markdown memory inside `ANDY_PLUGIN_STORAGE_ROOT`.
 - `@andy/plugin-filesystem` restricts read/list/write/delete to manifest-declared roots passed by the host.
 - `@andy/plugin-shell` runs commands without shell interpolation, requires a declared `cwd` root, bounds output, and is expected to be approval-gated by policy.
+- `@andy/plugin-browser` automates a local browser through Chrome DevTools Protocol. It only connects to localhost/127.0.0.1 CDP endpoints, exposes navigation/inspection/click/type/screenshot/form-submit tools, and keeps form submission, typing, screenshots, and navigation policy-gated because browser automation can exfiltrate data or act on behalf of the user.
+- `@andy/plugin-codex` delegates coding work to the locally authenticated OpenAI Codex SDK/CLI flow. It is disabled by default, declares `codex.run` and `codex.thread`, and requires approval because it invokes a nested coding agent that may inspect, edit, or execute code in the configured workspace.
+- `@andy/plugin-mcp-client` adapts explicit MCP stdio servers into Andy's plugin/runtime path. It is disabled by default, declares `mcp.connect`, `mcp.list_tools`, and `mcp.call_tool`, and remains approval-gated because MCP servers can expose external data and actions.
 - `@andy/plugin-telegram` uses the official Telegram Bot API for polling, send, webhook setup, and update normalization.
 - `@andy/plugin-whatsapp` uses the official Meta Graph API for outbound messages and webhook payload verification/normalization.
-- `@andy/plugin-voice-input`, `@andy/plugin-voice-output`, `@andy/plugin-vision`, and `@andy/plugin-computer-control` expose strict capability surfaces while native capture/provider depth is added incrementally. Voice output uses macOS `say` where available. Vision captures screenshots through platform adapters (`screencapture`, `gnome-screenshot`/`import`/`scrot`, or PowerShell) and prepares AI SDK image parts so multimodal LLMs can receive images directly. Computer control uses platform adapters for macOS (`osascript`), Linux (`xdotool`/`wmctrl`), and Windows (PowerShell/User32/SendKeys), and remains gated by `ANDY_ENABLE_COMPUTER_CONTROL=1` plus policy approval.
+- `@andy/plugin-voice-input`, `@andy/plugin-voice-output`, `@andy/plugin-vision`, and `@andy/plugin-computer-control` expose strict capability surfaces while native capture/provider depth is added incrementally. Voice input supports explicit activation, bounded recording through platform adapters, and transcript/audio handoff. Voice output uses platform adapters (`say`, `spd-say`/`espeak`, or PowerShell `System.Speech`) and supports stopping the active speech process. Vision captures screenshots through platform adapters (`screencapture`, `gnome-screenshot`/`import`/`scrot`, or PowerShell) and prepares AI SDK image parts so multimodal LLMs can receive images directly. Computer control uses platform adapters for macOS (`osascript`), Linux (`xdotool`/`wmctrl`), and Windows (PowerShell/User32/SendKeys), and remains gated by `ANDY_ENABLE_COMPUTER_CONTROL=1` plus policy approval.
 - `@andy/plugin-background-worker` persists background task requests, scheduled task records, and cancellation state inside plugin storage; privileged resumed work still re-enters core policy.
 - `@andy/plugin-notifications` records notification and approval-request deliveries through a manifest-declared notification surface and best-effort macOS local notifications for `channel: "local"`.
 - `@andy/plugin-swarm-orchestrator` manages bounded swarm plan/spawn/delegate/join/cancel state inside the manifest's agent-count, depth, role, and capability limits.
@@ -236,6 +236,48 @@ Implemented first-party system plugins:
 
 These plugins run through subprocess hosting, register only manifest-declared proxy tools, and have lifecycle tests for the security-sensitive paths. Capability behavior stays out of core.
 
+## Secrets
+
+Core exposes a secret broker interface so plugins can request only their declared secret scopes. The daemon now wires an OS-backed broker:
+
+- macOS: Keychain through `security`.
+- Linux: Secret Service through `secret-tool` when available.
+- Windows: Credential Manager through PowerShell and Win32 credential APIs.
+
+If the native store is unavailable, Andy falls back to `.andy/secrets.json` with encoded local records. The fallback file is not a substitute for platform keychain security; it exists so development and unsupported hosts can still exercise the broker contract. Secret requests remain audited and denied when the caller plugin did not declare the requested scope.
+
+## Prompt Injection And Provenance
+
+External content must be treated as untrusted input. Core now has provenance labels for source type, source id, trust level, and optional domain. Tool execution context can carry those labels into `AgentRuntime`.
+
+The first provenance policy is intentionally conservative:
+
+- untrusted provenance plus secret access is denied
+- untrusted provenance plus external/write side effects requires approval
+- trusted provenance keeps the normal capability policy path
+
+This is the foundation for prompt-injection defense. It does not yet fully propagate taint through every plugin output or model message; browser, email, document, calendar, file, and messaging plugins still need to label their outputs consistently.
+
 ## Upgrade Rule
 
 Plugin upgrades must not silently add capabilities. If the new manifest asks for more capabilities, network hosts, filesystem roots, or secret scopes, the user must approve the change before the plugin is enabled.
+
+## Agent Client Protocol
+
+Andy supports ACP-style stdio communication through `andy-daemon --acp`. ACP is the preferred client-agent protocol for local IDEs, controller apps, the CLI, and the desktop-hosted web console. Daemon HTTP remains only for health checks and external messaging webhooks.
+
+ACP prompts still execute through the same `AgentKernel`, plugin runtime, policy engine, approvals, cancellation registry, and audit surfaces. ACP does not grant a client direct access to undeclared plugin capabilities.
+
+## MCP Adapter Boundary
+
+Andy supports MCP through a plugin adapter, not by replacing the internal plugin/runtime model.
+
+```text
+Andy agent
+  -> AgentRuntime
+  -> policy / approval / audit
+  -> andy.mcp.client plugin
+  -> explicit MCP stdio server
+```
+
+The first MCP adapter can list tools from an explicit MCP stdio command and call a named MCP tool. Every MCP operation is still an Andy tool call with declared capabilities, policy checks, approval gates, and audit events. Future work should add a durable MCP server registry, per-server capability review, dynamic fully qualified Andy tool projection, and long-lived supervised MCP server processes.

@@ -12,6 +12,7 @@
   "dependencies": {
     "@andy/audit": "workspace:*",
     "@andy/core": "workspace:*",
+    "@andy/memory": "workspace:*",
     "@andy/model-ai-sdk": "workspace:*",
     "@andy/plugin-manager": "workspace:*",
     "@andy/plugin-sdk": "workspace:*",

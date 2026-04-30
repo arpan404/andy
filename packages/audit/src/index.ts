@@ -134,6 +134,34 @@ export type AuditEvent = AuditEventMetadata &
         progress: unknown;
       }
     | {
+        type: "task.graph.created";
+        taskGraphId: string;
+        stepCount: number;
+      }
+    | {
+        type:
+          | "task.run.created"
+          | "task.run.paused"
+          | "task.run.resumed"
+          | "task.run.completed"
+          | "task.run.failed";
+        taskRunId: string;
+        taskGraphId: string;
+        status: string;
+      }
+    | {
+        type:
+          | "task.step.ready"
+          | "task.step.leased"
+          | "task.step.completed"
+          | "task.step.failed"
+          | "task.step.retry_scheduled"
+          | "task.step.approval_required";
+        taskRunId: string;
+        taskStepId: string;
+        status: string;
+      }
+    | {
         type: "secret.requested" | "secret.rotated";
         pluginId: string;
         scope: string;

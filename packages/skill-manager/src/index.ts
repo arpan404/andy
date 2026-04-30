@@ -1,5 +1,7 @@
 import type { SkillLifecycleStatus, SkillManifest } from "@andy/skill-sdk";
 import { Effect, Schema } from "effect";
+import { Database } from "bun:sqlite";
+import { mkdirSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -305,6 +307,168 @@ export class JsonFileSkillRegistry {
       });
     });
   }
+}
+
+export class SqliteSkillRegistry {
+  readonly #path: string;
+  readonly #delegate = new InMemorySkillRegistry();
+  #loaded = false;
+
+  constructor(path: string) {
+    this.#path = path;
+  }
+
+  install(plan: SkillInstallPlan): Effect.Effect<InstalledSkillRecord, unknown> {
+    return Effect.gen(this, function* () {
+      yield* this.#loadOnce();
+      const record = yield* this.#delegate.install(plan);
+      yield* this.#save();
+      return record;
+    });
+  }
+
+  enable(skillId: string): Effect.Effect<InstalledSkillRecord, unknown> {
+    return Effect.gen(this, function* () {
+      yield* this.#loadOnce();
+      const record = yield* this.#delegate.enable(skillId);
+      yield* this.#save();
+      return record;
+    });
+  }
+
+  disable(skillId: string): Effect.Effect<InstalledSkillRecord, unknown> {
+    return Effect.gen(this, function* () {
+      yield* this.#loadOnce();
+      const record = yield* this.#delegate.disable(skillId);
+      yield* this.#save();
+      return record;
+    });
+  }
+
+  remove(skillId: string): Effect.Effect<InstalledSkillRecord, unknown> {
+    return Effect.gen(this, function* () {
+      yield* this.#loadOnce();
+      const record = yield* this.#delegate.remove(skillId);
+      yield* this.#save();
+      return record;
+    });
+  }
+
+  upgrade(
+    plan: SkillInstallPlan,
+    approval: "approved" | "not-approved",
+  ): Effect.Effect<InstalledSkillRecord, unknown> {
+    return Effect.gen(this, function* () {
+      yield* this.#loadOnce();
+      const record = yield* this.#delegate.upgrade(plan, approval);
+      yield* this.#save();
+      return record;
+    });
+  }
+
+  get(skillId: string): Effect.Effect<InstalledSkillRecord, unknown> {
+    return Effect.gen(this, function* () {
+      yield* this.#loadOnce();
+      return yield* this.#delegate.get(skillId);
+    });
+  }
+
+  list(): Effect.Effect<readonly InstalledSkillRecord[], unknown> {
+    return Effect.gen(this, function* () {
+      yield* this.#loadOnce();
+      return yield* this.#delegate.list();
+    });
+  }
+
+  hydrate(records: readonly InstalledSkillRecord[]): Effect.Effect<void, unknown> {
+    return Effect.gen(this, function* () {
+      this.#loaded = true;
+      yield* this.#delegate.hydrate(records);
+      yield* this.#save();
+    });
+  }
+
+  #loadOnce(): Effect.Effect<void, unknown> {
+    return Effect.gen(this, function* () {
+      if (this.#loaded) {
+        return;
+      }
+      const records = yield* Effect.try({
+        try: () => {
+          const database = this.#open();
+          try {
+            return database
+              .query("select record_json from skill_registry order by skill_id")
+              .all()
+              .flatMap((row) => parseSkillRegistryRow(row));
+          } finally {
+            database.close();
+          }
+        },
+        catch: (cause) => cause,
+      });
+      yield* this.#delegate.hydrate(records);
+      this.#loaded = true;
+    });
+  }
+
+  #save(): Effect.Effect<void, unknown> {
+    return Effect.gen(this, function* () {
+      const skills = yield* this.#delegate.list();
+      yield* Effect.try({
+        try: () => {
+          const database = this.#open();
+          try {
+            const transaction = database.transaction(
+              (records: readonly InstalledSkillRecord[]) => {
+                database.query("delete from skill_registry").run();
+                const insert = database.query(
+                  "insert into skill_registry (skill_id, status, record_json, updated_at) values ($skill_id, $status, $record_json, $updated_at)",
+                );
+                for (const record of records) {
+                  insert.run({
+                    $skill_id: record.manifest.id,
+                    $status: record.status,
+                    $record_json: JSON.stringify(record),
+                    $updated_at: record.updatedAt.toISOString(),
+                  });
+                }
+              },
+            );
+            transaction(skills);
+          } finally {
+            database.close();
+          }
+        },
+        catch: (cause) => cause,
+      });
+    });
+  }
+
+  #open(): Database {
+    mkdirSync(dirname(this.#path), { recursive: true });
+    const database = new Database(this.#path);
+    database.exec(`
+      create table if not exists skill_registry (
+        skill_id text primary key,
+        status text not null,
+        record_json text not null,
+        updated_at text not null
+      );
+    `);
+    return database;
+  }
+}
+
+function parseSkillRegistryRow(row: unknown): InstalledSkillRecord[] {
+  if (typeof row !== "object" || row === null) {
+    return [];
+  }
+  const recordJson = (row as { record_json?: unknown }).record_json;
+  if (typeof recordJson !== "string") {
+    return [];
+  }
+  return [normalizeRecordDates(JSON.parse(recordJson) as InstalledSkillRecord)];
 }
 
 function parseSkillRegistryFile(value: unknown): InstalledSkillRecord[] {

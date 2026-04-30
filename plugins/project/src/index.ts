@@ -44,7 +44,7 @@ function readProjectFile(input: JsonValue): Effect.Effect<JsonValue, unknown> {
     const parsed = requireObject(input, "project.read");
     const path = resolveProjectPath(requireString(parsed, "path"));
     const content = yield* Effect.tryPromise(() => readFile(path, "utf8"));
-    return { path, content };
+    return { path, content, provenance: fileProvenance(path) };
   })();
 }
 
@@ -77,7 +77,11 @@ function searchProject(input: JsonValue): Effect.Effect<JsonValue, unknown> {
         });
       }),
     );
-    return { query, matches };
+    return {
+      query,
+      matches,
+      provenance: matches.map((match) => fileProvenanceLabel(match.path)),
+    };
   })();
 }
 
@@ -162,6 +166,19 @@ function execute(
       );
     });
   });
+}
+
+function fileProvenance(path: string): JsonValue {
+  return [fileProvenanceLabel(path)];
+}
+
+function fileProvenanceLabel(path: string): JsonValue {
+  return {
+    sourceId: path,
+    sourceType: "file",
+    trust: "untrusted",
+    domain: "project",
+  };
 }
 
 function parseRoots(value: string): string[] {

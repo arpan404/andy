@@ -14,8 +14,7 @@
           <h1>Andy Console</h1>
         </div>
         <div class="daemon-url">
-          <label for="daemonUrl">Daemon URL</label>
-          <input id="daemonUrl" value="http://127.0.0.1:8765" />
+          <span>ACP bridge</span>
           <button id="refresh" type="button">Refresh</button>
         </div>
       </header>
@@ -37,9 +36,33 @@
           <span>Approvals</span>
           <strong id="approvalCount">0</strong>
         </article>
+        <article>
+          <span>Events</span>
+          <strong id="eventCount">0</strong>
+        </article>
+        <article>
+          <span>Traces</span>
+          <strong id="traceCount">0</strong>
+        </article>
       </section>
 
       <section class="workspace">
+        <div class="panel wide">
+          <div class="panel-head split">
+            <h2>Timeline</h2>
+            <span id="timelineMeta">latest 50 events</span>
+          </div>
+          <div id="events" class="timeline"></div>
+        </div>
+
+        <div class="panel wide">
+          <div class="panel-head split">
+            <h2>Traces</h2>
+            <span id="traceMeta">active and hydrated trace contexts</span>
+          </div>
+          <div id="traces" class="trace-grid"></div>
+        </div>
+
         <div class="panel">
           <div class="panel-head">
             <h2>Plugins</h2>
@@ -95,6 +118,28 @@ Use the selected skills and summarize daemon status.</textarea
           </label>
           <button id="runSkill" type="button">Run</button>
           <pre id="output"></pre>
+        </div>
+
+        <div class="panel command">
+          <div class="panel-head">
+            <h2>Voice Turn</h2>
+          </div>
+          <label
+            >Transcript
+            <textarea id="voiceText">Summarize current Andy status.</textarea>
+          </label>
+          <label
+            >Transcript File
+            <input id="voiceTranscript" placeholder="/absolute/path/to/transcript.txt"
+          /></label>
+          <label>Voice <input id="voiceName" placeholder="system default" /></label>
+          <label class="inline-check"
+            ><input id="voiceSpeak" type="checkbox" checked /> Speak response</label
+          >
+          <div class="button-row">
+            <button id="voiceTurn" type="button">Run Voice Turn</button>
+            <button id="voiceStop" type="button">Stop Speech</button>
+          </div>
         </div>
       </section>
     </main>

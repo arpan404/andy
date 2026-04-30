@@ -37,6 +37,7 @@ function capture(input: JsonValue): Effect.Effect<JsonValue, unknown> {
         captured: true,
         platform: platform(),
         backend,
+        provenance: visualProvenance(outputPath, "screen"),
       })),
     );
   })();
@@ -55,6 +56,7 @@ function describe(input: JsonValue): Effect.Effect<JsonValue, unknown> {
       imagePath: imagePath ?? null,
       bytes: bytes.byteLength,
       mediaType: detectImageType(bytes),
+      provenance: visualProvenance(imagePath ?? "inline-image", "image"),
       aiSdkImage: {
         type: "image",
         image: bytes.toString("base64"),
@@ -71,9 +73,24 @@ function ocr(input: JsonValue): JsonValue {
   return {
     text: "",
     imagePath: optionalString(parsed, "imagePath") ?? null,
+    provenance: visualProvenance(
+      optionalString(parsed, "imagePath") ?? "inline-image",
+      "image",
+    ),
     message:
       "OCR provider integration is pending; this tool defines the policy-gated OCR capability surface.",
   };
+}
+
+function visualProvenance(sourceId: string, domain: "screen" | "image"): JsonValue {
+  return [
+    {
+      sourceId,
+      sourceType: "file",
+      trust: "untrusted",
+      domain,
+    },
+  ];
 }
 
 function detectImageType(bytes: Buffer): string {

@@ -117,6 +117,54 @@ describe("AgentRuntime tool names", () => {
     }
   });
 
+  test("requires approval when untrusted provenance reaches external side effects", async () => {
+    const runtime = createRuntime(["messaging.send"]);
+    Effect.runSync(
+      runtime.registerPlugin(
+        definePlugin({
+          id: "andy.messaging.test",
+          name: "Test Messaging",
+          version: "0.1.0",
+          capabilities: ["messaging.send"],
+          tools: [
+            defineTool({
+              name: "messaging.send",
+              description: "Send a message",
+              capabilities: ["messaging.send"],
+              risk: "low",
+              execute() {
+                return Effect.succeed({ sent: true });
+              },
+            }),
+          ],
+        }),
+      ),
+    );
+
+    const result = await Effect.runPromiseExit(
+      runtime.executeTool(
+        "andy.messaging.test.messaging.send",
+        { text: "send this" },
+        {
+          provenance: [
+            {
+              sourceId: "email-1",
+              sourceType: "email",
+              trust: "untrusted",
+              domain: "mail.example",
+            },
+          ],
+        },
+      ),
+    );
+
+    expect(result._tag).toBe("Failure");
+    if (result._tag === "Failure") {
+      expect(String(result.cause)).toContain("ToolApprovalRequiredError");
+      expect(String(result.cause)).toContain("untrusted source");
+    }
+  });
+
   test("gates host API calls by the caller plugin manifest", async () => {
     const runtime = createRuntime(["agent.respond", "memory.save"]);
     registerMemorySavePlugin(runtime);

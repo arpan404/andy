@@ -1,6 +1,11 @@
+import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { arch, platform } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 interface ReleasePlugin {
   id: string;
@@ -20,6 +25,7 @@ interface ReleaseManifest {
   binaries: {
     cli: string;
     daemon: string;
+    desktop: string;
   };
   web: {
     path: string;
@@ -51,6 +57,10 @@ await copyRequired(
   join(root, "dist", "andy-daemon"),
   join(releaseRoot, "bin", "andy-daemon"),
 );
+await copyRequired(
+  join(root, "dist", "andy-desktop"),
+  join(releaseRoot, "bin", "andy-desktop"),
+);
 await copyRequired(join(root, "apps", "web", "dist"), join(releaseRoot, "web"));
 
 const plugins = await packagePlugins();
@@ -64,6 +74,7 @@ const manifest: ReleaseManifest = {
   binaries: {
     cli: "bin/andy",
     daemon: "bin/andy-daemon",
+    desktop: "bin/andy-desktop",
   },
   web: {
     path: "web",
@@ -77,10 +88,11 @@ await writeFile(
   `${JSON.stringify(manifest, null, 2)}\n`,
   "utf8",
 );
+const archive = await packageReleaseArchive(releaseName);
 
 console.log(
   JSON.stringify(
-    { releaseRoot, plugins: plugins.length, skills: skills.length },
+    { releaseRoot, archive, plugins: plugins.length, skills: skills.length },
     null,
     2,
   ),
@@ -213,6 +225,32 @@ async function exists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function packageReleaseArchive(releaseName: string): Promise<{
+  path: string;
+  sha256: string;
+}> {
+  const installerRoot = join(root, "dist", "installers");
+  await mkdir(installerRoot, { recursive: true });
+  const archivePath = join(installerRoot, `${releaseName}.tar.gz`);
+  await rm(archivePath, { force: true });
+  await execFileAsync("tar", [
+    "-czf",
+    archivePath,
+    "-C",
+    join(root, "dist", "release"),
+    releaseName,
+  ]);
+  const sha256 = await sha256File(archivePath);
+  await writeFile(`${archivePath}.sha256`, `${sha256}  ${releaseName}.tar.gz\n`);
+  return { path: archivePath, sha256 };
+}
+
+async function sha256File(path: string): Promise<string> {
+  return createHash("sha256")
+    .update(await readFile(path))
+    .digest("hex");
 }
 
 async function readText(path: string): Promise<string> {

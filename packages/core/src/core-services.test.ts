@@ -15,7 +15,7 @@ import { CancellationRegistry, withTimeout } from "./cancellation.js";
 import { CommunicationBridge } from "./communication.js";
 import { InMemoryEventBus } from "./events.js";
 import { AgentRuntime } from "./runtime.js";
-import { InMemorySecretBroker } from "./secrets.js";
+import { InMemorySecretBroker, JsonFileSecretBroker } from "./secrets.js";
 import { JsonFileCoreStateStore } from "./state.js";
 import { TraceManager } from "./tracing.js";
 import { DefaultHostedPluginHostApi } from "./host-api-handler.js";
@@ -240,6 +240,42 @@ describe("core kernel services", () => {
 
     expect(allowed).toBe("secret");
     expect(denied._tag).toBe("Failure");
+  });
+
+  test("persists encoded secret fallback records", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "andy-secret-broker-"));
+    const path = join(dir, "secrets.json");
+    const broker = new JsonFileSecretBroker({
+      audit: new ConsoleAuditSink(),
+      path,
+    });
+
+    await Effect.runPromise(
+      broker.save([
+        {
+          pluginId: "andy.messaging.telegram",
+          scope: "telegram.bot_token",
+          value: "telegram-secret",
+        },
+      ]),
+    );
+    const loaded = new JsonFileSecretBroker({
+      audit: new ConsoleAuditSink(),
+      path,
+    });
+    await Effect.runPromise(loaded.load());
+
+    const value = await Effect.runPromise(
+      loaded.get({
+        pluginId: "andy.messaging.telegram",
+        scope: "telegram.bot_token",
+        declaredScopes: new Set(["telegram.bot_token"]),
+      }),
+    );
+    const raw = await readFile(path, "utf8");
+
+    expect(value).toBe("telegram-secret");
+    expect(raw).not.toContain("telegram-secret");
   });
 
   test("publishes trace and background lifecycle events", async () => {
@@ -1290,6 +1326,49 @@ describe("core kernel services", () => {
         },
       ],
     });
+  });
+
+  test("loads first-party browser plugin manifest tools", async () => {
+    const audit = new ConsoleAuditSink();
+    const runtime = new AgentRuntime({
+      audit,
+      policy: new CapabilityPolicy({
+        allowedCapabilities: new Set([
+          "browser.navigate",
+          "browser.inspect",
+          "browser.click",
+          "browser.type",
+          "browser.screenshot",
+          "browser.submit_form",
+        ]),
+      }),
+    });
+    const lifecycle = new PluginLifecycleManager({
+      audit,
+      runtime,
+      host: new SubprocessManifestPluginHost({ audit }),
+    });
+    const manifest = {
+      ...parsePluginManifest(
+        JSON.parse(await readFile(resolve("plugins/browser/plugin.json"), "utf8")),
+      ),
+      entry: resolve("plugins/browser/src/index.ts"),
+    };
+
+    await Effect.runPromise(lifecycle.start(manifest));
+    const tools = runtime.listTools().map((tool) => tool.qualifiedName);
+    await Effect.runPromise(lifecycle.stop("andy.browser"));
+
+    expect(tools).toEqual(
+      expect.arrayContaining([
+        "andy.browser.browser.navigate",
+        "andy.browser.browser.inspect",
+        "andy.browser.browser.click",
+        "andy.browser.browser.type",
+        "andy.browser.browser.screenshot",
+        "andy.browser.browser.submit_form",
+      ]),
+    );
   });
 
   test("loads first-party background, notification, swarm, persistent memory, and semantic memory plugins", async () => {

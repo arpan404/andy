@@ -1,6 +1,8 @@
 import type { ToolDefinition } from "@andy/plugin-sdk";
 import type { JsonValue } from "@andy/types";
 import { Effect } from "effect";
+import { Database } from "bun:sqlite";
+import { mkdirSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
@@ -284,6 +286,84 @@ export class JsonFilePolicyStore {
       });
     })();
   }
+}
+
+export class SqlitePolicyStore {
+  readonly #path: string;
+
+  constructor(path: string) {
+    this.#path = path;
+  }
+
+  load(fallback: PolicyConfig): Effect.Effect<PolicyConfig, unknown> {
+    const self = this;
+    return Effect.fn("SqlitePolicyStore.load")(function* () {
+      const stored = yield* Effect.try({
+        try: () => {
+          const database = self.#open();
+          try {
+            const row = database
+              .query("select value_json from policy_config where id = 'default'")
+              .get();
+            return readPolicyRow(row);
+          } finally {
+            database.close();
+          }
+        },
+        catch: (cause) => cause,
+      });
+      if (!stored) {
+        yield* self.save(fallback);
+        return fallback;
+      }
+      return normalizePolicyConfig(stored, fallback);
+    })();
+  }
+
+  save(config: PolicyConfig): Effect.Effect<void, unknown> {
+    const self = this;
+    return Effect.fn("SqlitePolicyStore.save")(function* () {
+      yield* Effect.try({
+        try: () => {
+          const database = self.#open();
+          try {
+            database
+              .query(
+                "insert into policy_config (id, value_json, updated_at) values ('default', $value_json, $updated_at) on conflict(id) do update set value_json = excluded.value_json, updated_at = excluded.updated_at",
+              )
+              .run({
+                $value_json: JSON.stringify(config),
+                $updated_at: new Date().toISOString(),
+              });
+          } finally {
+            database.close();
+          }
+        },
+        catch: (cause) => cause,
+      });
+    })();
+  }
+
+  #open(): Database {
+    mkdirSync(dirname(this.#path), { recursive: true });
+    const database = new Database(this.#path);
+    database.exec(`
+      create table if not exists policy_config (
+        id text primary key,
+        value_json text not null,
+        updated_at text not null
+      );
+    `);
+    return database;
+  }
+}
+
+function readPolicyRow(row: unknown): unknown | undefined {
+  if (typeof row !== "object" || row === null) {
+    return undefined;
+  }
+  const valueJson = (row as { value_json?: unknown }).value_json;
+  return typeof valueJson === "string" ? JSON.parse(valueJson) : undefined;
 }
 
 function matchesRule(

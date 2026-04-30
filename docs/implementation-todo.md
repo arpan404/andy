@@ -20,14 +20,25 @@ This list tracks the first production path now that the core kernel is ready eno
 14. Implement remaining first-class system plugins: background-worker, notifications, swarm-orchestrator, persistent memory, and semantic memory. Done.
 15. Implement a real skills subsystem with typed manifests, durable registry, daemon APIs, CLI commands, and first-party skills. Done.
 16. Implement bundled skill discovery, skill-aware agent prompt context, project coding plugin, richer declarative skill workflow controls, install review APIs, more AI SDK providers, native-depth improvements, sensitive filesystem reads, and local web console. Done.
+17. Add a first-party browser automation plugin and harden daemon secrets with OS-backed storage. Done on `feature/browser-plugin-secrets-broker`.
+18. Add daemon/CLI/web observability for events, logs, and traces. Done.
+19. Add plugin signature trust records and release tarball/checksum artifacts. Done.
+20. Add ACP stdio mode for agent-client communication and keep daemon HTTP limited to health/webhook surfaces. Done on `feature/browser-plugin-secrets-broker`.
+21. Add first-party Codex plugin for local Codex SDK/CLI subscription-backed delegation, disabled by default and approval-required. Done on `feature/browser-plugin-secrets-broker`.
+22. Move the Andy CLI off HTTP and onto ACP stdio for status, config, plugin, skill, approval, observability, voice, and agent-run commands. Done on `feature/browser-plugin-secrets-broker`.
 
 ## Core Completion Todo
 
 1. Transactional storage layer. Done.
-2. Plugin install/enable/disable/remove API. Done for local manifest installs, GitHub immutable-ref installs, and lifecycle mutation over daemon HTTP.
+2. Plugin install/enable/disable/remove API. Done for local manifest installs, GitHub immutable-ref installs, and lifecycle mutation over daemon ACP.
 3. Plugin host crash/restart supervision. Done.
 4. Active cancellation propagation for in-flight tool execution. Done.
 5. Durable policy config and expiring grants. Done.
+
+## Deferred Follow-Up
+
+1. Real audio-file STT provider plugin. The voice loop supports provided text and transcript files today; recorded audio handoff is intentionally noted for later provider integration and hardware testing.
+2. Microphone capture validation on macOS, Linux, and Windows hardware.
 
 ## Rules
 
@@ -44,7 +55,7 @@ This list tracks the first production path now that the core kernel is ready eno
 - Core state now saves through an atomic JSON envelope with a schema version and temp-file rename.
 - Plugin registry JSON now saves through a schema-versioned atomic write.
 - Daemon writes and reads durable policy config from `.andy/policy.json`.
-- Daemon HTTP now exposes `GET /plugins`, `POST /plugins/install-local`, `POST /plugins/install-github`, `POST /plugins/:id/enable`, `POST /plugins/:id/disable`, `POST /plugins/:id/remove`, and `POST /plugins/restart-crashed`.
+- Daemon ACP now exposes typed plugin management methods for list, local install, GitHub install, lifecycle enable/disable/remove, and restart-crashed.
 - GitHub plugin installs clone immutable commit SHA or semver release tag refs into `.andy/github-plugins`, load the manifest from the checkout, and persist the checkout path in the installed-plugin registry.
 - CLI now exposes daemon-backed plugin commands for list, local install, GitHub install, enable, disable, remove, restart crashed hosts, and approval list/approve/deny.
 - First-party subprocess plugin manifests now include `binaryEntrypoint`, and the host launches compiled plugin binaries when present before falling back to Bun source entrypoints for development.
@@ -52,11 +63,12 @@ This list tracks the first production path now that the core kernel is ready eno
 - Plugin lifecycle reports host health and can restart crashed plugin hosts; failed restarts disable runtime proxy tools.
 - Active runtime cancellation races in-flight tool effects and interrupts hosted worker/subprocess calls.
 - Policy config supports per-plugin/channel/risk rules and expiring grants.
-- Skills are now declarative workflow packages with `@andy/skill-sdk`, `@andy/skill-manager`, `.andy/skills.json`, daemon APIs, and CLI commands.
+- Daemon secrets now use an OS-backed broker where available: macOS Keychain, Linux Secret Service, or Windows Credential Manager. Unsupported hosts fall back to encoded `.andy/secrets.json` records while preserving declared-scope checks and audit.
+- Skills are now declarative workflow packages with `@andy/skill-sdk`, `@andy/skill-manager`, `.andy/skills.json`, daemon ACP APIs, and CLI commands.
 - Skill execution composes fully qualified plugin tools through the normal runtime path, so policy, approval, audit, schemas, and plugin lifecycle still apply.
 - Plugin installs now discover bundled `skills/**/skill.json` manifests and install them as plugin-owned skill records.
 - Skill workflows support `when`, `forEach`, `continueOnError`, and `saveAs` while remaining declarative.
-- Agent runs can receive skill instructions, and daemon `POST /agent/run` can inject enabled skills into the model context.
+- Agent runs can receive skill instructions, and daemon ACP path `POST /agent/run` can inject enabled skills into the model context.
 - Added a durable JSON-file plugin registry in `@andy/plugin-manager`.
 - Installed plugin records now persist manifest, source, lifecycle status, install time, and update time.
 - Daemon boot now seeds the registry from config and starts enabled plugins from installed-plugin records.
@@ -64,6 +76,8 @@ This list tracks the first production path now that the core kernel is ready eno
 - Plugin lifecycle start replaces an already-running handle before starting the new one.
 - Runtime tool execution now checks cancellation tokens before executing tools.
 - Agent sessions, replayable audit/event history, and trace contexts now hydrate from and save to the core state snapshot.
+- Daemon ACP exposes `GET /events`, `GET /logs`, and `GET /traces`; CLI exposes `andy events`, `andy logs`, and `andy traces`; the web console reaches them through the desktop ACP bridge and shows a live timeline and trace list.
+- Plugin review/install now records trust state from optional Ed25519 `plugin.signature.json` files and configured trusted publishers.
 - Added focused tests for durable plugin registry, lifecycle stop behavior, durable events, session persistence, and cancelled tool execution.
 
 ### `memory-markdown`
@@ -96,6 +110,7 @@ This list tracks the first production path now that the core kernel is ready eno
 - Added `@andy/plugin-worker` for consistent subprocess JSON-line worker protocol helpers.
 - Added `@andy/plugin-filesystem` with scoped `filesystem.read`, `filesystem.list`, `filesystem.write`, and `filesystem.delete`.
 - Added `@andy/plugin-shell` with non-interpolated command execution, scoped `cwd`, bounded output, and approval-oriented `shell.execute` metadata.
+- Added `@andy/plugin-browser` with local CDP-backed navigation, inspection, click, type, screenshot, and form-submit tools. It only connects to localhost/127.0.0.1 CDP URLs and keeps high-risk browser actions behind policy.
 - Added `@andy/plugin-telegram` with official Bot API polling, send message, webhook configuration, and update normalization tools.
 - Added `@andy/plugin-whatsapp` with official Meta Graph API send, webhook verification, and webhook normalization tools.
 - Added `@andy/plugin-voice-input` and `@andy/plugin-voice-output` capability surfaces for explicit activation, transcript handoff, and local speech output.
@@ -126,13 +141,16 @@ This list tracks the first production path now that the core kernel is ready eno
 - Extended the web console with plugin and skill enable/disable actions, approval decisions, and skill-aware agent requests.
 - Added macOS local notification dispatch as a best-effort native delivery path in the notifications plugin.
 - Tightened computer-control key handling with named key-code support while preserving policy/env gating.
-- Added `andy ask --image <path>` and daemon `/agent/run` image payloads so multimodal AI SDK providers receive images directly.
+- Added `andy ask --image <path>` and daemon ACP `/agent/run` image payloads so multimodal AI SDK providers receive images directly.
+- Expanded voice plugins with explicit activation metadata, bounded cross-platform recording adapters, transcript/audio handoff, cross-platform TTS adapters, speech stop support, daemon `/voice/turn`, CLI `andy voice ...`, and web console voice controls.
+- Added `@andy/desktop`, a release-bundled desktop controller that starts/stops the daemon and web console, opens the browser console, and records local process state without bypassing daemon/plugin policy boundaries.
 
 ### Release Packaging
 
 - Added `bun run package:release` to assemble compiled release artifacts into `dist/release/andy-<version>-<platform>-<arch>/`.
 - Added `bun run build:release` to build workspaces, plugin binaries, CLI binary, daemon binary, and the release package in one command.
-- The release package includes `bin/andy`, `bin/andy-daemon`, built web assets, global first-party skills, first-party plugin manifests, plugin worker binaries, plugin-bundled skills, and `release.json`.
+- The release package includes `bin/andy`, `bin/andy-daemon`, `bin/andy-desktop`, built web assets, global first-party skills, first-party plugin manifests, plugin worker binaries, plugin-bundled skills, and `release.json`.
+- Release packaging also writes `dist/installers/*.tar.gz` plus a `.sha256` checksum file.
 - Packaging fails when a required binary, manifest, skill, or web asset is missing, so release validation catches incomplete runtime-free bundles.
 
 ### Telegram Remote Control
@@ -143,7 +161,9 @@ This list tracks the first production path now that the core kernel is ready eno
 
 ### HTTP Ingress And Remote Approvals
 
-- Daemon HTTP server now exposes `GET /health`, `GET /status`, `GET /approvals`, `POST /approvals/:id/approve`, and `POST /approvals/:id/deny`.
+- Daemon HTTP server is limited to `GET /health` and external webhook ingress; local status and approval decisions use ACP.
+- Long-running daemon mode now opens a persistent ACP socket at `$ANDY_HOME/.andy/andy.sock` on macOS/Linux and a named pipe on Windows.
+- CLI, desktop bridge, and development web bridge prefer the persistent ACP socket/pipe and only fall back to `andy-daemon --acp` stdio when no daemon is running.
 - Webhook ingress exists at `POST /webhooks/telegram` and `POST /webhooks/whatsapp`.
 - Webhook requests can be protected with `X-Andy-Webhook-Secret` using the configured `http.webhookSecretEnv`.
 - Telegram and WhatsApp inbound messages are normalized, published through `CommunicationBridge`, and can drive agent sessions when the channel remote-control config is enabled.

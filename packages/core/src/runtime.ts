@@ -39,6 +39,7 @@ import { createPluginHostApi } from "./host-api.js";
 import type { RuntimeToolRecord, ToolExecutionResult } from "./types.js";
 import { stringifyCause } from "./utils.js";
 import type { CancellationRegistry } from "./cancellation.js";
+import { decideProvenancePolicy, type ProvenanceLabel } from "./provenance.js";
 
 export interface AgentRuntimeOptions {
   audit: AuditSink;
@@ -60,6 +61,7 @@ export interface ToolExecutionContext {
   taskId?: string;
   traceId?: string;
   cancellationTokenId?: string;
+  provenance?: readonly ProvenanceLabel[];
 }
 
 export interface HostPrivilegePolicy {
@@ -328,6 +330,28 @@ export class AgentRuntime {
         agentId: context.agentId,
       });
 
+      const provenanceDecision = decideProvenancePolicy({
+        capabilities: registeredTool.definition.capabilities,
+        ...(context.provenance ? { provenance: context.provenance } : {}),
+      });
+      if (provenanceDecision.type === "deny") {
+        yield* self.#audit.record({
+          type: "policy.decision",
+          runId,
+          toolName,
+          decision: "deny",
+          ...(provenanceDecision.reason ? { reason: provenanceDecision.reason } : {}),
+          traceId: context.traceId,
+        });
+        return yield* Effect.fail(
+          new ToolPolicyDeniedError({
+            toolName,
+            reason: provenanceDecision.reason ?? "Denied by provenance policy.",
+            message: `Tool '${toolName}' denied by provenance policy.`,
+          }),
+        );
+      }
+
       const policyContext = {
         pluginId: registeredTool.pluginId,
         ...(context.userId ? { userId: context.userId } : {}),
@@ -360,12 +384,21 @@ export class AgentRuntime {
             };
       yield* self.#audit.record(policyEvent);
 
-      if (decision.type === "ask") {
+      const effectiveDecision =
+        decision.type !== "deny" && provenanceDecision.type === "ask"
+          ? {
+              type: "ask" as const,
+              reason:
+                provenanceDecision.reason ?? "Approval required by provenance policy.",
+            }
+          : decision;
+
+      if (effectiveDecision.type === "ask") {
         const approval = yield* self.#approvalManager.create({
           runId,
           toolName,
           input,
-          reason: decision.reason,
+          reason: effectiveDecision.reason,
           ...(context.channelId && context.conversationId
             ? {
                 communication: {
@@ -394,8 +427,8 @@ export class AgentRuntime {
           new ToolApprovalRequiredError({
             approvalId: approval.id,
             toolName,
-            reason: decision.reason,
-            message: decision.reason,
+            reason: effectiveDecision.reason,
+            message: effectiveDecision.reason,
           }),
         );
       }

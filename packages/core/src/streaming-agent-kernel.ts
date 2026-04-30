@@ -14,6 +14,7 @@ import type {
 } from "./types.js";
 import { AgentToolInputInvalidError } from "./errors.js";
 import { isJsonValue } from "@andy/types";
+import { inferToolOutputProvenance, type ProvenanceLabel } from "./provenance.js";
 
 export class StreamingAgentKernel {
   readonly #runtime: AgentRuntime;
@@ -56,7 +57,7 @@ export class StreamingAgentKernel {
   run(input: AgentRunInput): Effect.Effect<StreamingAgentRunResult, AgentKernelError> {
     const self = this;
     return Effect.fn("StreamingAgentKernel.run")(function* () {
-      const session = createSession(input);
+      let session = createSession(input);
       const events: StreamingAgentEvent[] = [
         {
           type: "stream.started",
@@ -120,8 +121,10 @@ export class StreamingAgentKernel {
           ...(session.cancellationTokenId
             ? { cancellationTokenId: session.cancellationTokenId }
             : {}),
+          ...(session.provenance ? { provenance: session.provenance } : {}),
         });
         toolResults.push(result);
+        session = appendToolOutputProvenance(session, call.toolName, result);
         events.push({
           type: "stream.tool_result",
           sessionId: session.id,
@@ -156,6 +159,40 @@ export class StreamingAgentKernel {
   }
 }
 
+function appendToolOutputProvenance(
+  session: AgentSession,
+  toolName: string,
+  result: ToolExecutionResult,
+): AgentSession {
+  const outputProvenance = inferToolOutputProvenance({
+    toolName,
+    runId: result.runId,
+    output: result.output,
+  });
+  if (outputProvenance.length === 0) {
+    return session;
+  }
+  return {
+    ...session,
+    provenance: mergeProvenance(session.provenance, outputProvenance),
+    updatedAt: new Date(),
+  };
+}
+
+function mergeProvenance(
+  existing: readonly ProvenanceLabel[] | undefined,
+  next: readonly ProvenanceLabel[],
+): readonly ProvenanceLabel[] {
+  const byKey = new Map<string, ProvenanceLabel>();
+  for (const label of [...(existing ?? []), ...next]) {
+    byKey.set(
+      `${label.sourceType}:${label.sourceId}:${label.trust}:${label.domain ?? ""}`,
+      label,
+    );
+  }
+  return [...byKey.values()];
+}
+
 function createSession(input: AgentRunInput): AgentSession {
   const now = new Date();
   const messages: AgentMessage[] = [];
@@ -174,9 +211,38 @@ function createSession(input: AgentRunInput): AgentSession {
     ...(input.cancellationTokenId
       ? { cancellationTokenId: input.cancellationTokenId }
       : {}),
+    provenance: deriveRunProvenance(input),
     createdAt: now,
     updatedAt: now,
   };
+}
+
+function deriveRunProvenance(input: AgentRunInput): readonly ProvenanceLabel[] {
+  if (input.provenance && input.provenance.length > 0) {
+    return input.provenance;
+  }
+  if (
+    input.channelId &&
+    input.channelId !== "acp" &&
+    input.channelId !== "local-voice"
+  ) {
+    return [
+      {
+        sourceId: input.conversationId ?? input.sessionId ?? input.channelId,
+        sourceType: "messaging",
+        trust: "untrusted",
+        domain: input.channelId,
+      },
+    ];
+  }
+  return [
+    {
+      sourceId: input.userId ?? input.sessionId ?? "local-user",
+      sourceType: "user",
+      trust: "trusted_user",
+      ...(input.channelId ? { domain: input.channelId } : {}),
+    },
+  ];
 }
 
 function toStreamingEvent(

@@ -1,5 +1,7 @@
 import realFs from "node:fs/promises";
+import { mkdirSync } from "node:fs";
 import path from "node:path";
+import { Database } from "bun:sqlite";
 import {
   getJsonObjectProperty,
   isJsonObject,
@@ -55,6 +57,78 @@ export interface MemoryStore {
   forget(id: string): Effect.Effect<boolean, MemoryStoreError>;
 }
 
+export type StructuredMemoryType =
+  | "preference"
+  | "fact"
+  | "relationship"
+  | "project"
+  | "procedure"
+  | "episode";
+
+export type StructuredMemorySensitivity = "low" | "medium" | "high";
+
+export type StructuredMemoryVisibility =
+  | "assistant"
+  | "user-review-required"
+  | "hidden-until-approved";
+
+export interface StructuredMemorySource {
+  channel: string;
+  sessionId?: string;
+  toolId?: string;
+  documentId?: string;
+}
+
+export interface StructuredMemoryRecord {
+  id: string;
+  type: StructuredMemoryType;
+  subject: string;
+  content: string;
+  source: StructuredMemorySource;
+  confidence: number;
+  sensitivity: StructuredMemorySensitivity;
+  visibility: StructuredMemoryVisibility;
+  createdAt: Date;
+  updatedAt: Date;
+  expiresAt?: Date;
+}
+
+export interface SaveStructuredMemoryInput {
+  id?: string;
+  type: StructuredMemoryType;
+  subject: string;
+  content: string;
+  source: StructuredMemorySource;
+  confidence?: number;
+  sensitivity?: StructuredMemorySensitivity;
+  visibility?: StructuredMemoryVisibility;
+  expiresAt?: Date;
+}
+
+export interface StructuredMemoryQuery {
+  type?: StructuredMemoryType;
+  subject?: string;
+  sensitivity?: StructuredMemorySensitivity;
+  visibility?: StructuredMemoryVisibility;
+  text?: string;
+  limit?: number;
+}
+
+export interface StructuredMemoryStore {
+  save(
+    input: SaveStructuredMemoryInput,
+  ): Effect.Effect<StructuredMemoryRecord, MemoryStoreError>;
+  get(id: string): Effect.Effect<StructuredMemoryRecord | undefined, MemoryStoreError>;
+  query(
+    query: StructuredMemoryQuery,
+  ): Effect.Effect<StructuredMemoryRecord[], MemoryStoreError>;
+  approve(
+    id: string,
+  ): Effect.Effect<StructuredMemoryRecord | undefined, MemoryStoreError>;
+  reject(id: string): Effect.Effect<boolean, MemoryStoreError>;
+  forget(id: string): Effect.Effect<boolean, MemoryStoreError>;
+}
+
 export class MemoryFileReadError extends Schema.TaggedError<MemoryFileReadError>()(
   "MemoryFileReadError",
   {
@@ -74,6 +148,225 @@ export class MemoryFileWriteError extends Schema.TaggedError<MemoryFileWriteErro
 ) {}
 
 export type MemoryStoreError = MemoryFileReadError | MemoryFileWriteError;
+
+export class SqliteStructuredMemoryStore implements StructuredMemoryStore {
+  readonly #path: string;
+
+  constructor(options: { path: string }) {
+    this.#path = path.resolve(options.path);
+  }
+
+  save(
+    input: SaveStructuredMemoryInput,
+  ): Effect.Effect<StructuredMemoryRecord, MemoryStoreError> {
+    const self = this;
+    return Effect.fn("SqliteStructuredMemoryStore.save")(function* () {
+      const now = new Date();
+      const existing = input.id ? yield* self.get(input.id) : undefined;
+      const record: StructuredMemoryRecord = {
+        id: existing?.id ?? input.id ?? crypto.randomUUID(),
+        type: input.type,
+        subject: input.subject,
+        content: input.content,
+        source: input.source,
+        confidence: clampConfidence(input.confidence ?? 0.5),
+        sensitivity: input.sensitivity ?? "medium",
+        visibility:
+          input.visibility ?? defaultVisibility(input.sensitivity ?? "medium"),
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+        ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
+      };
+      yield* self.#write(record);
+      return record;
+    })();
+  }
+
+  get(id: string): Effect.Effect<StructuredMemoryRecord | undefined, MemoryStoreError> {
+    return Effect.fn("SqliteStructuredMemoryStore.get")(() =>
+      this.#readAll().pipe(
+        Effect.map((records) => records.find((record) => record.id === id)),
+      ),
+    )();
+  }
+
+  query(
+    query: StructuredMemoryQuery,
+  ): Effect.Effect<StructuredMemoryRecord[], MemoryStoreError> {
+    return Effect.fn("SqliteStructuredMemoryStore.query")(() =>
+      this.#readAll().pipe(
+        Effect.map((records) => {
+          const text = query.text?.toLowerCase();
+          const limit = query.limit ?? 50;
+          return records
+            .filter((record) => !isStructuredMemoryExpired(record))
+            .filter((record) => !query.type || record.type === query.type)
+            .filter((record) => !query.subject || record.subject === query.subject)
+            .filter(
+              (record) =>
+                !query.sensitivity || record.sensitivity === query.sensitivity,
+            )
+            .filter(
+              (record) => !query.visibility || record.visibility === query.visibility,
+            )
+            .filter((record) => {
+              if (!text) return true;
+              return `${record.type} ${record.subject} ${record.content} ${record.source.channel}`
+                .toLowerCase()
+                .includes(text);
+            })
+            .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
+            .slice(0, limit);
+        }),
+      ),
+    )();
+  }
+
+  approve(
+    id: string,
+  ): Effect.Effect<StructuredMemoryRecord | undefined, MemoryStoreError> {
+    const self = this;
+    return Effect.fn("SqliteStructuredMemoryStore.approve")(function* () {
+      const record = yield* self.get(id);
+      if (!record) {
+        return undefined;
+      }
+      const updated: StructuredMemoryRecord = {
+        ...record,
+        visibility: "assistant",
+        updatedAt: new Date(),
+      };
+      yield* self.#write(updated);
+      return updated;
+    })();
+  }
+
+  reject(id: string): Effect.Effect<boolean, MemoryStoreError> {
+    return this.forget(id);
+  }
+
+  forget(id: string): Effect.Effect<boolean, MemoryStoreError> {
+    const self = this;
+    return Effect.fn("SqliteStructuredMemoryStore.forget")(function* () {
+      return yield* Effect.try({
+        try: () => {
+          const database = self.#open();
+          try {
+            const result = database
+              .query("delete from structured_memories where id = $id")
+              .run({ $id: id });
+            return result.changes > 0;
+          } finally {
+            database.close();
+          }
+        },
+        catch: (cause) =>
+          new MemoryFileWriteError({
+            path: self.#path,
+            message: `Unable to delete structured memory '${id}'.`,
+            cause: stringifyCause(cause),
+          }),
+      });
+    })();
+  }
+
+  #write(record: StructuredMemoryRecord): Effect.Effect<void, MemoryFileWriteError> {
+    return Effect.try({
+      try: () => {
+        const database = this.#open();
+        try {
+          database
+            .query(
+              `insert into structured_memories
+                (id, type, subject, content, source_json, confidence, sensitivity, visibility, created_at, updated_at, expires_at, record_json)
+               values
+                ($id, $type, $subject, $content, $source_json, $confidence, $sensitivity, $visibility, $created_at, $updated_at, $expires_at, $record_json)
+               on conflict(id) do update set
+                type = excluded.type,
+                subject = excluded.subject,
+                content = excluded.content,
+                source_json = excluded.source_json,
+                confidence = excluded.confidence,
+                sensitivity = excluded.sensitivity,
+                visibility = excluded.visibility,
+                updated_at = excluded.updated_at,
+                expires_at = excluded.expires_at,
+                record_json = excluded.record_json`,
+            )
+            .run({
+              $id: record.id,
+              $type: record.type,
+              $subject: record.subject,
+              $content: record.content,
+              $source_json: JSON.stringify(record.source),
+              $confidence: record.confidence,
+              $sensitivity: record.sensitivity,
+              $visibility: record.visibility,
+              $created_at: record.createdAt.toISOString(),
+              $updated_at: record.updatedAt.toISOString(),
+              $expires_at: record.expiresAt?.toISOString() ?? null,
+              $record_json: JSON.stringify(record),
+            });
+        } finally {
+          database.close();
+        }
+      },
+      catch: (cause) =>
+        new MemoryFileWriteError({
+          path: this.#path,
+          message: `Unable to write structured memory database '${this.#path}'.`,
+          cause: stringifyCause(cause),
+        }),
+    });
+  }
+
+  #readAll(): Effect.Effect<StructuredMemoryRecord[], MemoryFileReadError> {
+    return Effect.try({
+      try: () => {
+        const database = this.#open();
+        try {
+          return database
+            .query("select record_json from structured_memories")
+            .all()
+            .flatMap(parseStructuredMemoryRow);
+        } finally {
+          database.close();
+        }
+      },
+      catch: (cause) =>
+        new MemoryFileReadError({
+          path: this.#path,
+          message: `Unable to read structured memory database '${this.#path}'.`,
+          cause: stringifyCause(cause),
+        }),
+    });
+  }
+
+  #open(): Database {
+    mkdirSync(path.dirname(this.#path), { recursive: true });
+    const database = new Database(this.#path);
+    database.exec(`
+      create table if not exists structured_memories (
+        id text primary key,
+        type text not null,
+        subject text not null,
+        content text not null,
+        source_json text not null,
+        confidence real not null,
+        sensitivity text not null,
+        visibility text not null,
+        created_at text not null,
+        updated_at text not null,
+        expires_at text,
+        record_json text not null
+      );
+      create index if not exists structured_memories_visibility_idx on structured_memories(visibility);
+      create index if not exists structured_memories_subject_idx on structured_memories(subject);
+      create index if not exists structured_memories_type_idx on structured_memories(type);
+    `);
+    return database;
+  }
+}
 
 export class InMemoryStore implements MemoryStore {
   readonly #records = new Map<string, MemoryRecord>();
@@ -280,6 +573,42 @@ export class MarkdownMemoryStore implements MemoryStore {
 
 function isExpired(record: MemoryRecord): boolean {
   return record.expiresAt ? record.expiresAt.getTime() <= Date.now() : false;
+}
+
+function isStructuredMemoryExpired(record: StructuredMemoryRecord): boolean {
+  return record.expiresAt ? record.expiresAt.getTime() <= Date.now() : false;
+}
+
+function clampConfidence(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0.5;
+  }
+  return Math.max(0, Math.min(1, value));
+}
+
+function defaultVisibility(
+  sensitivity: StructuredMemorySensitivity,
+): StructuredMemoryVisibility {
+  return sensitivity === "high" ? "user-review-required" : "assistant";
+}
+
+function parseStructuredMemoryRow(row: unknown): StructuredMemoryRecord[] {
+  if (typeof row !== "object" || row === null) {
+    return [];
+  }
+  const recordJson = (row as { record_json?: unknown }).record_json;
+  if (typeof recordJson !== "string") {
+    return [];
+  }
+  const parsed = JSON.parse(recordJson) as StructuredMemoryRecord;
+  return [
+    {
+      ...parsed,
+      createdAt: new Date(parsed.createdAt),
+      updatedAt: new Date(parsed.updatedAt),
+      ...(parsed.expiresAt ? { expiresAt: new Date(parsed.expiresAt) } : {}),
+    },
+  ];
 }
 
 function stringifyCause(cause: unknown): string {

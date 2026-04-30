@@ -70,11 +70,19 @@ This runs the workspace build, compiles first-party plugin workers, compiles the
 dist/release/andy-<version>-<platform>-<arch>/
 ```
 
+It also writes a compressed install archive and checksum:
+
+```text
+dist/installers/andy-<version>-<platform>-<arch>.tar.gz
+dist/installers/andy-<version>-<platform>-<arch>.tar.gz.sha256
+```
+
 Package layout:
 
 ```text
 bin/andy
 bin/andy-daemon
+bin/andy-desktop
 plugins/<plugin>/plugin.json
 plugins/<plugin>/dist/plugin
 plugins/<plugin>/skills/**/skill.json
@@ -87,9 +95,25 @@ release.json
 
 `release.json` records the package platform, architecture, binaries, plugin manifests, plugin binary paths, bundled skills, and global skills. Release packaging fails if a required binary, plugin manifest, plugin worker binary, global skill manifest, or web asset is missing.
 
+The archive checksum is SHA-256 and is intended for first-release distribution verification. Codesigning, notarization, platform-native installers, and updater metadata remain separate release channels layered on top of the same package layout.
+
+## Desktop Controller
+
+The release bundle includes `bin/andy-desktop`, a local launcher/controller for the packaged daemon and web console:
+
+```bash
+./bin/andy-desktop start --home ~/.andy-runtime
+./bin/andy-desktop status --home ~/.andy-runtime
+./bin/andy-desktop open --home ~/.andy-runtime
+./bin/andy-desktop stop --home ~/.andy-runtime
+```
+
+`andy-desktop` starts the packaged daemon, serves the bundled web console, opens the console in the default browser, and stores local process state under `$ANDY_HOME/.andy/desktop.json`.
+
 ## CLI Operations
 
-The compiled `dist/andy` binary can manage a running daemon:
+The compiled `dist/andy` binary manages daemon state through ACP stdio. It does
+not need the HTTP server for CLI operations:
 
 ```bash
 ./dist/andy setup --home ~/.andy-runtime
@@ -107,12 +131,26 @@ The compiled `dist/andy` binary can manage a running daemon:
 ./dist/andy skill install-local skills/remember/skill.json --enable
 ./dist/andy skill run andy.skills.remember --workflow save --input '{"key":"editor","value":"vim"}'
 ./dist/andy ask --image /path/to/screenshot.png "What is visible here?"
+./dist/andy voice turn "Summarize current Andy status"
+./dist/andy voice stop
 ./dist/andy approval list
+./dist/andy events --limit 25
+./dist/andy traces --limit 25
 ```
 
-Use `--url http://host:port` or `ANDY_DAEMON_URL` to target a daemon that is not listening on `http://127.0.0.1:8765`.
+CLI daemon operations use ACP stdio, not HTTP. Use `--home` or `ANDY_HOME` to select the daemon home for one-shot ACP commands.
 
 `andy setup` can run before the daemon is already running. It creates the selected home directory and initializes `.andy/daemon.json` by invoking the sibling `andy-daemon --init` binary. Use `--force` only when intentionally recreating that config.
+
+## ACP Stdio Mode
+
+The daemon can run as an ACP-style stdio server for agent-client integrations:
+
+```bash
+./dist/andy-daemon --acp
+```
+
+ACP is the preferred transport for IDEs, desktop controllers, CLI commands, and agent clients that need to create or resume sessions and submit prompts. Daemon HTTP remains only for health checks and external messaging webhooks. See [ACP](./acp.md).
 
 ## Validation
 
@@ -124,10 +162,12 @@ bun run check
 bun run build
 bun run build:binary
 bun run build:daemon-binary
+bun run build:desktop-binary
 bun run build:plugin-binaries
 bun run package:release
 ./dist/andy "binary smoke"
 ./dist/andy-daemon --status
+./dist/andy-desktop status --home "$(mktemp -d)"
 ```
 
 To validate plugin execution without invoking Bun for plugin workers, temporarily run the daemon with `bun` unavailable on `PATH` after `bun run build:plugin-binaries`; enabled first-party plugins should still start through their `binaryEntrypoint`.

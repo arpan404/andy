@@ -3,19 +3,25 @@ import { ConsoleAuditSink } from "@andy/audit";
 import { AgentRuntime } from "@andy/core";
 import { definePlugin, defineTool } from "@andy/plugin-sdk";
 import { CapabilityPolicy } from "@andy/policy";
-import { getJsonObjectProperty, isJsonObject, type JsonValue } from "@andy/types";
+import {
+  getJsonObjectProperty,
+  isJsonObject,
+  type JsonObject,
+  type JsonValue,
+} from "@andy/types";
 import { Effect } from "effect";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
+import { platform } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { createConnection } from "node:net";
 
-type HttpMethod = "GET" | "POST";
+type DaemonRequestMethod = "GET" | "POST";
 
 interface ParsedArgs {
   command: string | undefined;
   rest: string[];
-  url: string;
   enable: boolean;
   manifestPath?: string;
   workflow?: string;
@@ -31,6 +37,15 @@ interface ParsedArgs {
   channel?: string;
   pollMs?: number;
   images: { path: string; mediaType?: string }[];
+  audioPath?: string;
+  transcriptPath?: string;
+  voice?: string;
+  speak: boolean;
+  limit?: number;
+  eventType?: string;
+  traceId?: string;
+  sessionId?: string;
+  fromSequence?: number;
 }
 
 const corePlugin = definePlugin({
@@ -62,7 +77,7 @@ const corePlugin = definePlugin({
 const parsed = parseArgs(process.argv.slice(2));
 
 if (parsed.command === "status") {
-  await printDaemonJson(parsed.url, "GET", "/status");
+  await printDaemonJson("GET", "/status");
 } else if (parsed.command === "setup") {
   await runSetupCommand(parsed);
 } else if (parsed.command === "config") {
@@ -71,8 +86,20 @@ if (parsed.command === "status") {
   await runPluginCommand(parsed);
 } else if (parsed.command === "skill" || parsed.command === "skills") {
   await runSkillCommand(parsed);
+} else if (parsed.command === "task" || parsed.command === "tasks") {
+  await runTaskCommand(parsed);
+} else if (parsed.command === "memory" || parsed.command === "memories") {
+  await runMemoryCommand(parsed);
 } else if (parsed.command === "ask") {
   await runAskCommand(parsed);
+} else if (parsed.command === "voice") {
+  await runVoiceCommand(parsed);
+} else if (
+  parsed.command === "events" ||
+  parsed.command === "logs" ||
+  parsed.command === "traces"
+) {
+  await runObservabilityCommand(parsed);
 } else if (parsed.command === "approval" || parsed.command === "approvals") {
   await runApprovalCommand(parsed);
 } else if (parsed.command === "help" || parsed.command === "--help") {
@@ -113,8 +140,8 @@ async function runSetupCommand(args: ParsedArgs): Promise<void> {
         home,
         configPath,
         next: [
-          "Start the daemon with ANDY_HOME set to this directory.",
-          "Use `andy config show` after the daemon is running.",
+          "Use `andy status --home <path>` or set ANDY_HOME for ACP-backed CLI commands.",
+          "Start `andy-desktop` or `andy-daemon` only when you need the web console, webhooks, or background loops.",
         ],
       },
       null,
@@ -123,10 +150,42 @@ async function runSetupCommand(args: ParsedArgs): Promise<void> {
   );
 }
 
+async function runTaskCommand(args: ParsedArgs): Promise<void> {
+  const [action] = args.rest;
+  if (!action || action === "list") {
+    await printDaemonJson("GET", "/tasks");
+    return;
+  }
+  throw new Error(`Unknown task command '${action}'.`);
+}
+
+async function runMemoryCommand(args: ParsedArgs): Promise<void> {
+  const [action, id] = args.rest;
+  if (!action || action === "list") {
+    const params = new URLSearchParams();
+    if (args.limit) params.set("limit", String(args.limit));
+    if (args.eventType) params.set("type", args.eventType);
+    if (args.channel) params.set("visibility", args.channel);
+    if (args.traceId) params.set("sensitivity", args.traceId);
+    if (args.sessionId) params.set("subject", args.sessionId);
+    const query = params.toString();
+    await printDaemonJson("GET", `/memory${query ? `?${query}` : ""}`);
+    return;
+  }
+  if (action === "approve" || action === "reject" || action === "forget") {
+    if (!id) {
+      throw new Error(`Usage: andy memory ${action} <memoryId>`);
+    }
+    await printDaemonJson("POST", `/memory/${id}/${action}`);
+    return;
+  }
+  throw new Error(`Unknown memory command '${action}'.`);
+}
+
 async function runConfigCommand(args: ParsedArgs): Promise<void> {
   const [action, subject, value] = args.rest;
   if (!action || action === "show") {
-    await printDaemonJson(args.url, "GET", "/config");
+    await printDaemonJson("GET", "/config");
     return;
   }
   if (action === "set-model-provider") {
@@ -136,7 +195,7 @@ async function runConfigCommand(args: ParsedArgs): Promise<void> {
         "Usage: andy config set-model-provider <id> --provider openai|anthropic|google --model <modelId> [--api-key-env ENV] [--enable]",
       );
     }
-    await printDaemonJson(args.url, "POST", "/config/model-provider", {
+    await printDaemonJson("POST", "/config/model-provider", {
       id,
       provider: normalizeProvider(args.provider),
       modelId: args.model,
@@ -151,7 +210,6 @@ async function runConfigCommand(args: ParsedArgs): Promise<void> {
       throw new Error(`Usage: andy config ${action} <id>`);
     }
     await printDaemonJson(
-      args.url,
       "POST",
       `/config/model-provider/${id}/${action.startsWith("enable") ? "enable" : "disable"}`,
     );
@@ -164,7 +222,7 @@ async function runConfigCommand(args: ParsedArgs): Promise<void> {
         "Usage: andy config remote <telegram|whatsapp> [--enable|--disable] [--model-provider id]",
       );
     }
-    await printDaemonJson(args.url, "POST", "/config/remote-control", {
+    await printDaemonJson("POST", "/config/remote-control", {
       channel,
       enabled: args.enable && !args.disable,
       ...(args.modelProviderId ? { modelProviderId: args.modelProviderId } : {}),
@@ -181,7 +239,7 @@ async function runAskCommand(args: ParsedArgs): Promise<void> {
   if (!message) {
     throw new Error("Usage: andy ask [--skills skill.a,skill.b] <message>");
   }
-  await printDaemonJson(args.url, "POST", "/agent/run", {
+  await printDaemonJson("POST", "/agent/run", {
     message,
     skillIds: args.skills,
     ...(args.modelProviderId ? { modelProviderId: args.modelProviderId } : {}),
@@ -189,10 +247,37 @@ async function runAskCommand(args: ParsedArgs): Promise<void> {
   });
 }
 
+async function runVoiceCommand(args: ParsedArgs): Promise<void> {
+  const [action, ...rest] = args.rest;
+  if (action === "stop") {
+    await printDaemonJson("POST", "/voice/stop", {});
+    return;
+  }
+  if (!action || action === "turn") {
+    const text = rest.join(" ").trim();
+    if (!text && !args.audioPath && !args.transcriptPath) {
+      throw new Error(
+        "Usage: andy voice turn [--audio path|--transcript path|text] [--no-speak] [--voice name]",
+      );
+    }
+    await printDaemonJson("POST", "/voice/turn", {
+      ...(text ? { text } : {}),
+      ...(args.audioPath ? { audioPath: args.audioPath } : {}),
+      ...(args.transcriptPath ? { transcriptPath: args.transcriptPath } : {}),
+      ...(args.modelProviderId ? { modelProviderId: args.modelProviderId } : {}),
+      ...(args.skills.length > 0 ? { skillIds: args.skills } : {}),
+      ...(args.voice ? { voice: args.voice } : {}),
+      speak: args.speak,
+    });
+    return;
+  }
+  throw new Error(`Unknown voice command '${action}'.`);
+}
+
 async function runPluginCommand(args: ParsedArgs): Promise<void> {
   const [action, ...rest] = args.rest;
   if (!action || action === "list") {
-    await printDaemonJson(args.url, "GET", "/plugins");
+    await printDaemonJson("GET", "/plugins");
     return;
   }
 
@@ -201,7 +286,7 @@ async function runPluginCommand(args: ParsedArgs): Promise<void> {
     if (!manifestPath) {
       throw new Error("Usage: andy plugin install-local <manifestPath> [--enable]");
     }
-    await printDaemonJson(args.url, "POST", "/plugins/install-local", {
+    await printDaemonJson("POST", "/plugins/install-local", {
       manifestPath,
       enabled: args.enable,
     });
@@ -212,7 +297,7 @@ async function runPluginCommand(args: ParsedArgs): Promise<void> {
     if (!manifestPath) {
       throw new Error("Usage: andy plugin review-local <manifestPath>");
     }
-    await printDaemonJson(args.url, "POST", "/plugins/review-local", {
+    await printDaemonJson("POST", "/plugins/review-local", {
       manifestPath,
     });
     return;
@@ -225,7 +310,7 @@ async function runPluginCommand(args: ParsedArgs): Promise<void> {
         "Usage: andy plugin install-github <repository-url> <commit-or-version-tag> [--manifest plugin.json] [--enable]",
       );
     }
-    await printDaemonJson(args.url, "POST", "/plugins/install-github", {
+    await printDaemonJson("POST", "/plugins/install-github", {
       repository,
       ref,
       ...(args.manifestPath ? { manifestPath: args.manifestPath } : {}),
@@ -239,12 +324,12 @@ async function runPluginCommand(args: ParsedArgs): Promise<void> {
     if (!pluginId) {
       throw new Error(`Usage: andy plugin ${action} <pluginId>`);
     }
-    await printDaemonJson(args.url, "POST", `/plugins/${pluginId}/${action}`);
+    await printDaemonJson("POST", `/plugins/${pluginId}/${action}`);
     return;
   }
 
   if (action === "restart-crashed") {
-    await printDaemonJson(args.url, "POST", "/plugins/restart-crashed");
+    await printDaemonJson("POST", "/plugins/restart-crashed");
     return;
   }
 
@@ -254,7 +339,7 @@ async function runPluginCommand(args: ParsedArgs): Promise<void> {
 async function runSkillCommand(args: ParsedArgs): Promise<void> {
   const [action, ...rest] = args.rest;
   if (!action || action === "list") {
-    await printDaemonJson(args.url, "GET", "/skills");
+    await printDaemonJson("GET", "/skills");
     return;
   }
 
@@ -263,7 +348,7 @@ async function runSkillCommand(args: ParsedArgs): Promise<void> {
     if (!manifestPath) {
       throw new Error("Usage: andy skill install-local <manifestPath> [--enable]");
     }
-    await printDaemonJson(args.url, "POST", "/skills/install-local", {
+    await printDaemonJson("POST", "/skills/install-local", {
       manifestPath,
       enabled: args.enable,
     });
@@ -274,7 +359,7 @@ async function runSkillCommand(args: ParsedArgs): Promise<void> {
     if (!manifestPath) {
       throw new Error("Usage: andy skill review-local <manifestPath>");
     }
-    await printDaemonJson(args.url, "POST", "/skills/review-local", {
+    await printDaemonJson("POST", "/skills/review-local", {
       manifestPath,
     });
     return;
@@ -285,7 +370,7 @@ async function runSkillCommand(args: ParsedArgs): Promise<void> {
     if (!skillId) {
       throw new Error(`Usage: andy skill ${action} <skillId>`);
     }
-    await printDaemonJson(args.url, "POST", `/skills/${skillId}/${action}`);
+    await printDaemonJson("POST", `/skills/${skillId}/${action}`);
     return;
   }
 
@@ -296,7 +381,7 @@ async function runSkillCommand(args: ParsedArgs): Promise<void> {
         'Usage: andy skill run <skillId> [--workflow name] [--input \'{"key":"value"}\']',
       );
     }
-    await printDaemonJson(args.url, "POST", `/skills/${skillId}/run`, {
+    await printDaemonJson("POST", `/skills/${skillId}/run`, {
       ...(args.workflow ? { workflow: args.workflow } : {}),
       input: args.input ?? {},
     });
@@ -309,7 +394,7 @@ async function runSkillCommand(args: ParsedArgs): Promise<void> {
 async function runApprovalCommand(args: ParsedArgs): Promise<void> {
   const [action, approvalId] = args.rest;
   if (!action || action === "list") {
-    await printDaemonJson(args.url, "GET", "/approvals");
+    await printDaemonJson("GET", "/approvals");
     return;
   }
 
@@ -317,41 +402,192 @@ async function runApprovalCommand(args: ParsedArgs): Promise<void> {
     if (!approvalId) {
       throw new Error(`Usage: andy approval ${action} <approvalId>`);
     }
-    await printDaemonJson(args.url, "POST", `/approvals/${approvalId}/${action}`);
+    await printDaemonJson("POST", `/approvals/${approvalId}/${action}`);
     return;
   }
 
   throw new Error(`Unknown approval command '${action}'.`);
 }
 
+async function runObservabilityCommand(args: ParsedArgs): Promise<void> {
+  const params = new URLSearchParams();
+  if (args.limit) {
+    params.set("limit", String(args.limit));
+  }
+  if (args.eventType && args.command !== "traces") {
+    params.set("type", args.eventType);
+  }
+  if (args.traceId) {
+    params.set("traceId", args.traceId);
+  }
+  if (args.sessionId && args.command !== "traces") {
+    params.set("sessionId", args.sessionId);
+  }
+  if (args.fromSequence && args.command !== "traces") {
+    params.set("fromSequence", String(args.fromSequence));
+  }
+  const query = params.toString();
+  await printDaemonJson("GET", `/${args.command}${query ? `?${query}` : ""}`);
+}
+
 async function printDaemonJson(
-  baseUrl: string,
-  method: HttpMethod,
+  method: DaemonRequestMethod,
   path: string,
   body?: JsonValue,
 ): Promise<void> {
-  const response = await fetch(`${baseUrl}${path}`, {
-    method,
-    ...(body
-      ? {
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(body),
-        }
-      : {}),
-  });
-  const text = await response.text();
-  const parsedBody = parseJsonResponse(text);
-  if (!response.ok) {
-    throw new Error(
-      `Daemon request failed with ${response.status}: ${JSON.stringify(parsedBody)}`,
-    );
+  const typed = toTypedAcpRequest(method, path, body);
+  const result = await runAcpRequest(typed.method, typed.params);
+  console.log(JSON.stringify(result, null, 2));
+}
+
+function toTypedAcpRequest(
+  method: DaemonRequestMethod,
+  path: string,
+  body?: JsonValue,
+): { method: string; params: JsonValue } {
+  const [pathname = path, queryString] = path.split("?", 2);
+  const query = Object.fromEntries(new URLSearchParams(queryString ?? ""));
+  const params = {
+    ...(Object.keys(query).length > 0 ? { query } : {}),
+    ...(body !== undefined ? { body } : {}),
+  };
+
+  if (method === "GET" && pathname === "/status") {
+    return { method: "andy.status", params };
   }
-  console.log(JSON.stringify(parsedBody, null, 2));
+  if (method === "GET" && pathname === "/config") {
+    return { method: "andy.config.get", params };
+  }
+  if (method === "POST" && pathname === "/config/model-provider") {
+    return { method: "andy.config.upsertModelProvider", params: body ?? {} };
+  }
+  const modelProviderMatch = pathname.match(
+    /^\/config\/model-provider\/([^/]+)\/(enable|disable)$/,
+  );
+  if (method === "POST" && modelProviderMatch) {
+    return {
+      method: "andy.config.setModelProviderEnabled",
+      params: {
+        providerId: decodeURIComponent(modelProviderMatch[1] ?? ""),
+        action: modelProviderMatch[2] ?? "enable",
+      },
+    };
+  }
+  if (method === "POST" && pathname === "/config/remote-control") {
+    return { method: "andy.config.updateRemoteControl", params: body ?? {} };
+  }
+  if (method === "POST" && pathname === "/agent/run") {
+    return { method: "andy.agent.run", params: body ?? {} };
+  }
+  if (method === "POST" && pathname === "/voice/turn") {
+    return { method: "andy.voice.turn", params: body ?? {} };
+  }
+  if (method === "POST" && pathname === "/voice/stop") {
+    return { method: "andy.voice.stop", params: {} };
+  }
+  if (method === "GET" && pathname === "/plugins") {
+    return { method: "andy.plugins.list", params };
+  }
+  if (method === "POST" && pathname === "/plugins/install-local") {
+    return { method: "andy.plugins.installLocal", params: body ?? {} };
+  }
+  if (method === "POST" && pathname === "/plugins/review-local") {
+    return { method: "andy.plugins.reviewLocal", params: body ?? {} };
+  }
+  if (method === "POST" && pathname === "/plugins/install-github") {
+    return { method: "andy.plugins.installGithub", params: body ?? {} };
+  }
+  if (method === "POST" && pathname === "/plugins/restart-crashed") {
+    return { method: "andy.plugins.restartCrashed", params: {} };
+  }
+  const pluginActionMatch = pathname.match(
+    /^\/plugins\/([^/]+)\/(enable|disable|remove)$/,
+  );
+  if (method === "POST" && pluginActionMatch) {
+    const action = pluginActionMatch[2] ?? "enable";
+    return {
+      method: action === "remove" ? "andy.plugins.remove" : "andy.plugins.setEnabled",
+      params: {
+        pluginId: decodeURIComponent(pluginActionMatch[1] ?? ""),
+        ...(action !== "remove" ? { action } : {}),
+      },
+    };
+  }
+  if (method === "GET" && pathname === "/skills") {
+    return { method: "andy.skills.list", params };
+  }
+  if (method === "POST" && pathname === "/skills/install-local") {
+    return { method: "andy.skills.installLocal", params: body ?? {} };
+  }
+  if (method === "POST" && pathname === "/skills/review-local") {
+    return { method: "andy.skills.reviewLocal", params: body ?? {} };
+  }
+  const skillActionMatch = pathname.match(
+    /^\/skills\/([^/]+)\/(enable|disable|remove)$/,
+  );
+  if (method === "POST" && skillActionMatch) {
+    const action = skillActionMatch[2] ?? "enable";
+    return {
+      method: action === "remove" ? "andy.skills.remove" : "andy.skills.setEnabled",
+      params: {
+        skillId: decodeURIComponent(skillActionMatch[1] ?? ""),
+        ...(action !== "remove" ? { action } : {}),
+      },
+    };
+  }
+  const skillRunMatch = pathname.match(/^\/skills\/([^/]+)\/run$/);
+  if (method === "POST" && skillRunMatch) {
+    return {
+      method: "andy.skills.run",
+      params: {
+        skillId: decodeURIComponent(skillRunMatch[1] ?? ""),
+        body: body ?? {},
+      },
+    };
+  }
+  if (method === "GET" && pathname === "/approvals") {
+    return { method: "andy.approvals.list", params };
+  }
+  const approvalActionMatch = pathname.match(/^\/approvals\/([^/]+)\/(approve|deny)$/);
+  if (method === "POST" && approvalActionMatch) {
+    return {
+      method: "andy.approvals.decide",
+      params: {
+        approvalId: decodeURIComponent(approvalActionMatch[1] ?? ""),
+        action: approvalActionMatch[2] ?? "approve",
+      },
+    };
+  }
+  if (method === "GET" && pathname === "/events") {
+    return { method: "andy.events.query", params };
+  }
+  if (method === "GET" && pathname === "/logs") {
+    return { method: "andy.logs.query", params };
+  }
+  if (method === "GET" && pathname === "/traces") {
+    return { method: "andy.traces.query", params };
+  }
+  if (method === "GET" && pathname === "/tasks") {
+    return { method: "andy.tasks.list", params };
+  }
+  if (method === "GET" && pathname === "/memory") {
+    return { method: "andy.memory.list", params: query ?? {} };
+  }
+  const memoryActionMatch = pathname.match(
+    /^\/memory\/([^/]+)\/(approve|reject|forget)$/,
+  );
+  if (method === "POST" && memoryActionMatch) {
+    const action = memoryActionMatch[2] ?? "approve";
+    return {
+      method: `andy.memory.${action}`,
+      params: { id: decodeURIComponent(memoryActionMatch[1] ?? "") },
+    };
+  }
+
+  throw new Error(`No typed ACP method for ${method} ${pathname}.`);
 }
 
 function parseArgs(input: string[]): ParsedArgs {
-  const { ANDY_DAEMON_URL } = process.env;
-  let url = ANDY_DAEMON_URL ?? "http://127.0.0.1:8765";
   let enable = false;
   let manifestPath: string | undefined;
   let home: string | undefined;
@@ -360,22 +596,22 @@ function parseArgs(input: string[]): ParsedArgs {
   let apiKeyEnv: string | undefined;
   let channel: string | undefined;
   let pollMs: number | undefined;
+  let audioPath: string | undefined;
+  let transcriptPath: string | undefined;
+  let voice: string | undefined;
+  let limit: number | undefined;
+  let eventType: string | undefined;
+  let traceId: string | undefined;
+  let sessionId: string | undefined;
+  let fromSequence: number | undefined;
   const images: { path: string; mediaType?: string }[] = [];
   let force = false;
   let disable = false;
+  let speak = true;
   const positional: string[] = [];
 
   for (let index = 0; index < input.length; index += 1) {
     const arg = input[index];
-    if (arg === "--url") {
-      const value = input[index + 1];
-      if (!value) {
-        throw new Error("--url requires a value.");
-      }
-      url = trimTrailingSlash(value);
-      index += 1;
-      continue;
-    }
     if (arg === "--enable") {
       enable = true;
       continue;
@@ -453,6 +689,74 @@ function parseArgs(input: string[]): ParsedArgs {
       index += 1;
       continue;
     }
+    if (arg === "--audio") {
+      const value = input[index + 1];
+      if (!value) {
+        throw new Error("--audio requires a file path.");
+      }
+      audioPath = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--transcript") {
+      const value = input[index + 1];
+      if (!value) {
+        throw new Error("--transcript requires a file path.");
+      }
+      transcriptPath = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--voice") {
+      const value = input[index + 1];
+      if (!value) {
+        throw new Error("--voice requires a value.");
+      }
+      voice = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--limit") {
+      limit = parsePositiveFlag(input[index + 1], "--limit");
+      index += 1;
+      continue;
+    }
+    if (arg === "--type") {
+      const value = input[index + 1];
+      if (!value) {
+        throw new Error("--type requires a value.");
+      }
+      eventType = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--trace-id") {
+      const value = input[index + 1];
+      if (!value) {
+        throw new Error("--trace-id requires a value.");
+      }
+      traceId = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--session-id") {
+      const value = input[index + 1];
+      if (!value) {
+        throw new Error("--session-id requires a value.");
+      }
+      sessionId = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--from-sequence") {
+      fromSequence = parsePositiveFlag(input[index + 1], "--from-sequence");
+      index += 1;
+      continue;
+    }
+    if (arg === "--no-speak") {
+      speak = false;
+      continue;
+    }
     if (arg === "--manifest") {
       const value = input[index + 1];
       if (!value) {
@@ -515,10 +819,10 @@ function parseArgs(input: string[]): ParsedArgs {
       .filter(
         (item) => !item.startsWith("__skills:") && !item.startsWith("__modelProvider:"),
       ),
-    url: trimTrailingSlash(url),
     enable,
     force,
     disable,
+    speak,
     images,
     skills: skillsMarker
       ? skillsMarker
@@ -534,6 +838,14 @@ function parseArgs(input: string[]): ParsedArgs {
     ...(apiKeyEnv ? { apiKeyEnv } : {}),
     ...(channel ? { channel } : {}),
     ...(pollMs ? { pollMs } : {}),
+    ...(audioPath ? { audioPath } : {}),
+    ...(transcriptPath ? { transcriptPath } : {}),
+    ...(voice ? { voice } : {}),
+    ...(limit ? { limit } : {}),
+    ...(eventType ? { eventType } : {}),
+    ...(traceId ? { traceId } : {}),
+    ...(sessionId ? { sessionId } : {}),
+    ...(fromSequence ? { fromSequence } : {}),
     ...(workflowMarker ? { workflow: workflowMarker.slice("__workflow:".length) } : {}),
     ...(modelProviderMarker
       ? { modelProviderId: modelProviderMarker.slice("__modelProvider:".length) }
@@ -542,6 +854,14 @@ function parseArgs(input: string[]): ParsedArgs {
       ? { input: parseJsonResponse(inputMarker.slice("__input:".length)) }
       : {}),
   };
+}
+
+function parsePositiveFlag(value: string | undefined, flag: string): number {
+  const parsed = value ? Number(value) : Number.NaN;
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`${flag} requires a positive number.`);
+  }
+  return parsed;
 }
 
 function guessImageMediaType(path: string): string | undefined {
@@ -577,6 +897,7 @@ async function spawnAndCollect(
   command: string,
   args: string[],
   env: Record<string, string>,
+  stdin?: string,
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   return new Promise((resolveResult, reject) => {
     const child = spawn(command, args, {
@@ -594,6 +915,136 @@ async function spawnAndCollect(
     child.once("error", reject);
     child.once("exit", (code) => {
       resolveResult({ exitCode: code ?? 1, stdout, stderr });
+    });
+    if (stdin !== undefined) {
+      child.stdin.end(stdin);
+    }
+  });
+}
+
+async function runAcpRequest(method: string, params: JsonValue): Promise<JsonValue> {
+  const daemonPath = findDaemonBinary();
+  const id = 1;
+  const payload = `${JSON.stringify({
+    jsonrpc: "2.0",
+    id,
+    method,
+    params,
+  })}\n`;
+  const socketPath = getAcpSocketPath(resolveAndyHome());
+  if (existsSync(socketPath) || platform() === "win32") {
+    const socketResult = await tryAcpSocketRequest(socketPath, payload, id);
+    if (socketResult.connected) {
+      return socketResult.result;
+    }
+  }
+  const result = await spawnAndCollect(
+    daemonPath,
+    ["--acp"],
+    parsed.home ? { ANDY_HOME: resolve(parsed.home) } : {},
+    payload,
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr || `andy-daemon --acp exited ${result.exitCode}`);
+  }
+  const response = result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => parseJsonResponse(line))
+    .find(
+      (item): item is JsonObject =>
+        isJsonObject(item) && getJsonObjectProperty(item, "id") === id,
+    );
+  if (!response) {
+    throw new Error("ACP daemon did not return a response.");
+  }
+  const error = getJsonObjectProperty(response, "error");
+  if (isJsonObject(error)) {
+    const message = getJsonObjectProperty(error, "message");
+    throw new Error(typeof message === "string" ? message : JSON.stringify(error));
+  }
+  const resultValue = getJsonObjectProperty(response, "result");
+  return isJsonValue(resultValue) ? resultValue : {};
+}
+
+function resolveAndyHome(): string {
+  const { ANDY_HOME } = process.env;
+  return resolve(parsed.home ?? ANDY_HOME ?? process.cwd());
+}
+
+function getAcpSocketPath(home: string): string {
+  if (platform() === "win32") {
+    return `\\\\.\\pipe\\andy-${home.replace(/[^a-zA-Z0-9_.-]/g, "_")}`;
+  }
+  return join(home, ".andy", "andy.sock");
+}
+
+async function tryAcpSocketRequest(
+  socketPath: string,
+  payload: string,
+  id: number,
+): Promise<{ connected: true; result: JsonValue } | { connected: false }> {
+  return await new Promise((resolveRequest, reject) => {
+    const socket = createConnection(socketPath);
+    let buffer = "";
+    let settled = false;
+    const finishNotConnected = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      socket.destroy();
+      resolveRequest({ connected: false });
+    };
+    socket.once("error", (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT" || error.code === "ECONNREFUSED") {
+        finishNotConnected();
+        return;
+      }
+      if (!settled) {
+        settled = true;
+        reject(error);
+      }
+    });
+    socket.on("data", (chunk: Buffer) => {
+      buffer += chunk.toString("utf8");
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) {
+          continue;
+        }
+        const item = parseJsonResponse(trimmed);
+        if (!isJsonObject(item) || getJsonObjectProperty(item, "id") !== id) {
+          continue;
+        }
+        const error = getJsonObjectProperty(item, "error");
+        if (isJsonObject(error)) {
+          const message = getJsonObjectProperty(error, "message");
+          settled = true;
+          socket.end();
+          reject(
+            new Error(typeof message === "string" ? message : JSON.stringify(error)),
+          );
+          return;
+        }
+        const result = getJsonObjectProperty(item, "result");
+        settled = true;
+        socket.end();
+        resolveRequest({ connected: true, result: isJsonValue(result) ? result : {} });
+        return;
+      }
+    });
+    socket.once("connect", () => {
+      socket.write(payload);
+    });
+    socket.once("end", () => {
+      if (!settled) {
+        settled = true;
+        reject(new Error("ACP socket closed before returning a response."));
+      }
     });
   });
 }
@@ -619,22 +1070,23 @@ function isJsonValue(value: unknown): value is JsonValue {
   );
 }
 
-function trimTrailingSlash(value: string): string {
-  return value.endsWith("/") ? value.slice(0, -1) : value;
-}
-
 function printHelp(): void {
   console.log(`Andy CLI
 
 Usage:
   andy setup [--home path] [--force]
-  andy status [--url http://127.0.0.1:8765]
+  andy status [--home path]
   andy config show
   andy config set-model-provider <id> --provider openai|anthropic|google --model <modelId> [--api-key-env ENV] [--enable]
   andy config enable-model-provider <id>
   andy config disable-model-provider <id>
   andy config remote <telegram|whatsapp> [--enable|--disable] [--model-provider id] [--poll-ms ms]
   andy ask [--skills skill.a,skill.b] [--model-provider id] [--image path] <message>
+  andy voice turn [--skills skill.a,skill.b] [--model-provider id] [--audio path|--transcript path|text] [--voice name] [--no-speak]
+  andy voice stop
+  andy events [--limit n] [--type event.type] [--trace-id id] [--session-id id] [--from-sequence n]
+  andy logs [--limit n] [--type event.type] [--trace-id id] [--session-id id]
+  andy traces [--limit n] [--trace-id id]
   andy plugin list
   andy plugin install-local <manifestPath> [--enable]
   andy plugin review-local <manifestPath>
@@ -650,12 +1102,17 @@ Usage:
   andy skill disable <skillId>
   andy skill remove <skillId>
   andy skill run <skillId> [--workflow name] [--input '{"key":"value"}']
+  andy task list
+  andy memory list [--limit n] [--type preference|fact|relationship|project|procedure|episode] [--channel visibility] [--trace-id sensitivity] [--session-id subject]
+  andy memory approve <memoryId>
+  andy memory reject <memoryId>
+  andy memory forget <memoryId>
   andy approval list
   andy approval approve <approvalId>
   andy approval deny <approvalId>
 
 Environment:
-  ANDY_DAEMON_URL overrides the daemon URL.`);
+  ANDY_HOME selects the daemon home used by ACP-backed CLI commands.`);
 }
 
 async function runLegacySmoke(message: string): Promise<void> {
