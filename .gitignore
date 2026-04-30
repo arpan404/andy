@@ -1,4 +1,11 @@
-/target
-/.idea
-/.vscode
+.build/
+DerivedData/
+Packages/
+*.xcodeproj/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+.swiftpm/
+*.swp
 *.log
+.DS_Store
