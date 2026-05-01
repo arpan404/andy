@@ -58,10 +58,10 @@ public final class ToolEngine: @unchecked Sendable {
             let output = try await adapter.execute(input: invocation.input, context: context)
             await observability.append(name: "tool.execute", details: invocation.toolID)
             return .executed(output)
-        case let .requireApproval(reason):
+        case .requireApproval(let reason):
             await observability.append(name: "tool.approval.required", details: reason)
             return .approvalRequired(PendingApproval(action: proposedAction))
-        case let .deny(reason):
+        case .deny(let reason):
             await observability.append(name: "tool.denied", details: reason)
             throw ToolEngineError.actionDenied(reason)
         }
@@ -84,9 +84,9 @@ public enum ToolEngineError: LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case let .toolNotFound(toolID):
+        case .toolNotFound(let toolID):
             return "Tool not found: \(toolID)"
-        case let .actionDenied(reason):
+        case .actionDenied(let reason):
             return "Action denied: \(reason)"
         }
     }

@@ -39,7 +39,8 @@ public final class AssistantAppViewModel: ObservableObject {
                 for await transcript in orchestrator.transcriptStream() {
                     timeline.append("Transcript: \(transcript)")
                 }
-            } catch {
+            }
+            catch {
                 timeline.append("Voice error: \(error.localizedDescription)")
                 voiceState = .idle
             }
@@ -75,7 +76,8 @@ public final class AssistantAppViewModel: ObservableObject {
             if !output.toolOutputs.isEmpty {
                 timeline.append("Tools: \(output.toolOutputs.map(\.summary).joined(separator: " | "))")
             }
-        } catch {
+        }
+        catch {
             timeline.append("Turn error: \(error.localizedDescription)")
         }
     }

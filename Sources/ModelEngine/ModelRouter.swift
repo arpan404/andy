@@ -52,7 +52,8 @@ public final class ModelRouter: ModelRouting, @unchecked Sendable {
         case .allowCloud:
             return cloudProvider
         case .preferLocal:
-            let isComplex = request.messages.count > 10 || request.latencyBudgetMs > configuration.preferCloudIfLatencyBudgetAboveMs
+            let isComplex =
+                request.messages.count > 10 || request.latencyBudgetMs > configuration.preferCloudIfLatencyBudgetAboveMs
             return isComplex ? cloudProvider : localProvider
         }
     }

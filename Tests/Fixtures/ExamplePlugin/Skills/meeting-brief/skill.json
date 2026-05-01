@@ -1,0 +1,6 @@
+{
+    "id": "meeting-brief",
+    "version": "1.0.0",
+    "display_name": "Meeting Brief",
+    "description": "Prepare a short meeting brief from context and notes."
+}

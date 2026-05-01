@@ -1,9 +1,12 @@
 import AssistantRuntime
 import AssistantTypes
+import Foundation
 import IntegrationKit
 import MemoryStore
 import ModelEngine
 import Observability
+import PluginHost
+import PluginSDK
 import PolicySafety
 import SwiftData
 import ToolEngine
@@ -26,13 +29,19 @@ public enum AssistantAppContainer {
             observability: observability
         )
         let voiceProvider = AppleVoiceProvider(observability: observability)
-        let adapters: [any ToolAdapter] = [
-            FileToolAdapter(observability: observability),
-            CalendarToolAdapter(observability: observability),
-            RemindersToolAdapter(observability: observability),
-            MailToolAdapter(observability: observability),
-            MessagesToolAdapter(observability: observability),
-        ]
+        let plugin = FirstPartyMeetingBriefPlugin(observability: observability)
+        let pluginContext = PluginContext(
+            pluginID: plugin.manifest.id,
+            installURL: URL(fileURLWithPath: NSHomeDirectory())
+        )
+        let adapters: [any ToolAdapter] =
+            [
+                FileToolAdapter(observability: observability),
+                CalendarToolAdapter(observability: observability),
+                RemindersToolAdapter(observability: observability),
+                MailToolAdapter(observability: observability),
+                MessagesToolAdapter(observability: observability),
+            ] + plugin.makeTools(context: pluginContext)
         let toolEngine = ToolEngine(
             policyEngine: policyEngine,
             observability: observability,

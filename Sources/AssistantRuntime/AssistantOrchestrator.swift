@@ -85,7 +85,7 @@ public final class AssistantOrchestrator: @unchecked Sendable {
         }
 
         await observability.append(name: "assistant.output", details: modelResponse.text)
-        _ = policyEngine // retained as core dependency for future policy-aware prompting.
+        _ = policyEngine  // retained as core dependency for future policy-aware prompting.
         return AssistantTurnOutput(
             assistantMessage: assistantMessage,
             pendingApprovals: toolResult.pendingApprovals,
@@ -128,9 +128,9 @@ public final class AssistantOrchestrator: @unchecked Sendable {
                 safetyContext: safetyContext
             )
             switch result {
-            case let .executed(output):
+            case .executed(let output):
                 outputs.append(output)
-            case let .approvalRequired(approval):
+            case .approvalRequired(let approval):
                 pending.append(approval)
             }
         }
